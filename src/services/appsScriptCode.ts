@@ -261,6 +261,18 @@ function handleRequest(e) {
       }
       response.success = true;
       response.hasPasswordConfigured = !!storedHash;
+    } else if (action === 'initializeDatabase' || actionLower === 'initializedatabase' || actionLower === 'initdatabase') {
+      var initResult = runDatabaseInitialization(ss);
+      response.success = initResult.success;
+      response.message = initResult.message;
+      response.details = initResult.details;
+      response.hasPasswordConfigured = initResult.hasPasswordConfigured;
+    } else if (action === 'verifyDatabase' || actionLower === 'verifydatabase') {
+      var verifyResult = runDatabaseVerification(ss);
+      response.success = verifyResult.success;
+      response.message = verifyResult.message;
+      response.details = verifyResult.details;
+      response.hasPasswordConfigured = verifyResult.hasPasswordConfigured;
     } else {
       // Safety fallback: if an action is sent with data arrays, persist them safely
       if (postData.applicationStatuses || postData.clients || postData.categories) {
@@ -364,6 +376,232 @@ function setupSheetsIfMissing(ss) {
   getCategoriesSheet(ss);
   getStatusesSheet(ss);
   getSettingsSheet(ss);
+}
+
+/**
+ * Initializes all required database sheets, headers, and defaults idempotently.
+ * Never deletes or overwrites existing rows or passwords.
+ */
+function runDatabaseInitialization(ss) {
+  var details = {
+    clients: false,
+    categories: false,
+    applicationStatuses: false,
+    settings: false,
+    defaultStatusesCreated: 0,
+    defaultCategoriesCreated: 0,
+    defaultSettingsCreated: false
+  };
+
+  try {
+    // 1. Clients Sheet & Headers
+    var clientsSheet = ss.getSheetByName('Clients');
+    var clientHeaders = [
+      'Client ID', 'Client Name', 'Phone Number', 'Category', 
+      'Total Amount', 'Paid Amount', 'Due Amount', 'Application Status', 
+      'Payment Status', 'Created Date', 'Notes'
+    ];
+    if (!clientsSheet) {
+      clientsSheet = ss.insertSheet('Clients');
+      clientsSheet.appendRow(clientHeaders);
+      clientsSheet.getRange(1, 1, 1, clientHeaders.length).setFontWeight('bold').setBackground('#f1f5f9');
+    } else {
+      ensureSheetHeaders(clientsSheet, clientHeaders);
+    }
+    details.clients = true;
+
+    // 2. Categories Sheet & Headers
+    var categoriesSheet = ss.getSheetByName('Categories');
+    var categoryHeaders = ['Category ID', 'Category Name', 'Status', 'Created Date'];
+    if (!categoriesSheet) {
+      categoriesSheet = ss.insertSheet('Categories');
+      categoriesSheet.appendRow(categoryHeaders);
+      categoriesSheet.getRange(1, 1, 1, categoryHeaders.length).setFontWeight('bold').setBackground('#f1f5f9');
+    } else {
+      ensureSheetHeaders(categoriesSheet, categoryHeaders);
+    }
+    details.categories = true;
+
+    // Seed default categories if empty
+    if (categoriesSheet.getLastRow() <= 1) {
+      var defaultCats = [
+        ['CAT-001', 'Saudi Scholarship', 'ACTIVE', '2026-09-01'],
+        ['CAT-002', 'University Admission', 'ACTIVE', '2026-09-02'],
+        ['CAT-003', 'Visa Application', 'ACTIVE', '2026-09-03']
+      ];
+      categoriesSheet.getRange(2, 1, defaultCats.length, 4).setValues(defaultCats);
+      details.defaultCategoriesCreated = defaultCats.length;
+    }
+
+    // 3. ApplicationStatuses Sheet & Headers
+    var statusesSheet = ss.getSheetByName('ApplicationStatuses');
+    var statusHeaders = ['Status ID', 'Status Name', 'Status', 'Created Date'];
+    if (!statusesSheet) {
+      statusesSheet = ss.insertSheet('ApplicationStatuses');
+      statusesSheet.appendRow(statusHeaders);
+      statusesSheet.getRange(1, 1, 1, statusHeaders.length).setFontWeight('bold').setBackground('#f1f5f9');
+    } else {
+      ensureSheetHeaders(statusesSheet, statusHeaders);
+    }
+    details.applicationStatuses = true;
+
+    // Seed default application statuses if empty
+    if (statusesSheet.getLastRow() <= 1) {
+      var defaultStatuses = [
+        ['APP-001', 'New', 'ACTIVE', '2026-09-01'],
+        ['APP-002', 'Processing', 'ACTIVE', '2026-09-02'],
+        ['APP-003', 'Completed', 'ACTIVE', '2026-09-03'],
+        ['APP-004', 'Rejected', 'ACTIVE', '2026-09-04']
+      ];
+      statusesSheet.getRange(2, 1, defaultStatuses.length, 4).setValues(defaultStatuses);
+      details.defaultStatusesCreated = defaultStatuses.length;
+    }
+
+    // 4. Settings Sheet & Defaults
+    var settingsSheet = ss.getSheetByName('Settings');
+    var settingsHeaders = ['Setting Key', 'Setting Value'];
+    if (!settingsSheet) {
+      settingsSheet = ss.insertSheet('Settings');
+      settingsSheet.appendRow(settingsHeaders);
+      settingsSheet.getRange(1, 1, 1, settingsHeaders.length).setFontWeight('bold').setBackground('#f1f5f9');
+    } else {
+      ensureSheetHeaders(settingsSheet, settingsHeaders);
+    }
+    details.settings = true;
+
+    // Seed default branding & configuration only if missing (never overwrite existing values or password)
+    var existingSettings = {};
+    var lastRow = settingsSheet.getLastRow();
+    if (lastRow > 1) {
+      var sVals = settingsSheet.getRange(2, 1, lastRow - 1, 2).getValues();
+      for (var s = 0; s < sVals.length; s++) {
+        var k = String(sVals[s][0] || '').trim();
+        if (k) existingSettings[k] = String(sVals[s][1] || '');
+      }
+    }
+
+    var defaultSettingsPairs = [
+      ['app_title', 'Client Management & Application Tracking System'],
+      ['app_slogan', 'Google Sheets Database'],
+      ['logo_url', ''],
+      ['currency', 'USD'],
+      ['custom_currency_symbol', '']
+    ];
+
+    for (var d = 0; d < defaultSettingsPairs.length; d++) {
+      var key = defaultSettingsPairs[d][0];
+      var defaultVal = defaultSettingsPairs[d][1];
+      if (existingSettings[key] === undefined) {
+        settingsSheet.appendRow([key, defaultVal]);
+        details.defaultSettingsCreated = true;
+      }
+    }
+
+    var hasPassword = !!(existingSettings['dashboard_password_hash']);
+
+    return {
+      success: true,
+      message: 'Database structure initialized and verified successfully',
+      details: details,
+      hasPasswordConfigured: hasPassword
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: 'Failed to initialize database: ' + err.toString(),
+      details: details,
+      hasPasswordConfigured: false
+    };
+  }
+}
+
+/**
+ * Ensures a sheet has the required column headers at row 1 without destroying data.
+ */
+function ensureSheetHeaders(sheet, expectedHeaders) {
+  var lastCol = sheet.getLastColumn();
+  if (lastCol === 0 || sheet.getLastRow() === 0) {
+    sheet.appendRow(expectedHeaders);
+    sheet.getRange(1, 1, 1, expectedHeaders.length).setFontWeight('bold').setBackground('#f1f5f9');
+    return;
+  }
+  var currentHeaders = sheet.getRange(1, 1, 1, Math.max(lastCol, expectedHeaders.length)).getValues()[0] || [];
+  var needsUpdate = false;
+  var finalHeaders = [];
+  for (var i = 0; i < expectedHeaders.length; i++) {
+    var cur = String(currentHeaders[i] || '').trim();
+    if (!cur) {
+      finalHeaders.push(expectedHeaders[i]);
+      needsUpdate = true;
+    } else {
+      finalHeaders.push(cur);
+    }
+  }
+  if (needsUpdate) {
+    sheet.getRange(1, 1, 1, finalHeaders.length).setValues([finalHeaders]).setFontWeight('bold');
+  }
+}
+
+/**
+ * Verifies that all 4 required database sheets and their required headers exist and are readable.
+ */
+function runDatabaseVerification(ss) {
+  var sheets = ['Clients', 'Categories', 'ApplicationStatuses', 'Settings'];
+  var verification = {
+    clients: false,
+    categories: false,
+    applicationStatuses: false,
+    settings: false,
+    canReadWrite: false
+  };
+
+  try {
+    for (var i = 0; i < sheets.length; i++) {
+      var sName = sheets[i];
+      var sh = ss.getSheetByName(sName);
+      if (!sh) {
+        return {
+          success: false,
+          message: 'Required sheet "' + sName + '" is missing.',
+          details: verification,
+          hasPasswordConfigured: false
+        };
+      }
+      if (sName === 'Clients') verification.clients = true;
+      if (sName === 'Categories') verification.categories = true;
+      if (sName === 'ApplicationStatuses') verification.applicationStatuses = true;
+      if (sName === 'Settings') verification.settings = true;
+    }
+
+    // Verify Settings read
+    var settingsSheet = ss.getSheetByName('Settings');
+    var sLastRow = settingsSheet.getLastRow();
+    var hasPassword = false;
+    if (sLastRow > 1) {
+      var sVals = settingsSheet.getRange(2, 1, sLastRow - 1, 2).getValues();
+      for (var j = 0; j < sVals.length; j++) {
+        if (String(sVals[j][0] || '').trim() === 'dashboard_password_hash') {
+          hasPassword = String(sVals[j][1] || '').length > 0;
+        }
+      }
+    }
+
+    verification.canReadWrite = true;
+
+    return {
+      success: true,
+      message: 'All 4 database sheets and structure verified successfully',
+      details: verification,
+      hasPasswordConfigured: hasPassword
+    };
+  } catch (err) {
+    return {
+      success: false,
+      message: 'Database verification failed: ' + err.toString(),
+      details: verification,
+      hasPasswordConfigured: false
+    };
+  }
 }
 
 function readClients(ss) {

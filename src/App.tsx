@@ -30,13 +30,16 @@ import {
   DEFAULT_APPLICATION_STATUSES,
   verifyDashboardPassword,
   setDashboardPassword,
-  checkPasswordConfigured
+  checkPasswordConfigured,
+  isFirstTimeSetupCompleted,
+  markFirstTimeSetupCompleted
 } from './services/googleSheetsService';
 import { compressLogoDataUrl } from './services/imageUtils';
 import { translations } from './services/translations';
 
 import { Navbar } from './components/Navbar';
 import { LockPage } from './components/LockPage';
+import { FirstTimeSetup } from './components/FirstTimeSetup';
 import { DashboardView } from './components/DashboardView';
 import { ClientManagementView } from './components/ClientManagementView';
 import { CategoryManagementView } from './components/CategoryManagementView';
@@ -61,8 +64,31 @@ export default function App() {
   const [applicationStatuses, setApplicationStatuses] = useState<ApplicationStatusItem[]>(DEFAULT_APPLICATION_STATUSES);
   const [branding, setBranding] = useState<AppBranding>(DEFAULT_BRANDING);
 
-  // Security & Lock State: ALWAYS starts locked on load/refresh per user instructions
-  const [isLocked, setIsLocked] = useState<boolean>(true);
+  // First-time setup state (persisted in localStorage)
+  const [isSetupComplete, setIsSetupComplete] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return isFirstTimeSetupCompleted();
+    }
+    return false;
+  });
+
+  // Security & Lock State:
+  // - If setup is complete AND current browser session was already unlocked (e.g. page reload / refresh), restore dashboard unlocked.
+  // - In a fresh browser session (new tab/window after close), or when explicitly locked/inactivity, show LockPage.
+  // - sessionStorage automatically clears when the tab/browser is closed, making it ideal for session vs setup distinction.
+  const [isLocked, setIsLocked] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const setupDone = isFirstTimeSetupCompleted();
+      if (!setupDone) return true; // not setup yet -> setup wizard will be shown
+
+      const sessionUnlocked = sessionStorage.getItem('dashboard_session_active') === 'true';
+      if (sessionUnlocked) {
+        return false; // Browser reload during active dashboard session
+      }
+    }
+    return true; // Fresh application session: show Lock Page
+  });
+
   const [hasPasswordConfigured, setHasPasswordConfigured] = useState<boolean>(false);
 
   // Sheets Config
@@ -176,17 +202,16 @@ export default function App() {
     const config = loadSheetsConfig();
     setSheetsConfig(config);
 
-    // If Google Sheet is configured, quickly check password configuration status
-    if (config.webAppUrl && config.webAppUrl.trim().startsWith('http')) {
+    // Only interact with remote Google Sheets if setup has been completed
+    if (isFirstTimeSetupCompleted() && config.webAppUrl && config.webAppUrl.trim().startsWith('http')) {
+      // Quickly check password configuration status
       checkPasswordConfigured(config.webAppUrl).then((chk) => {
         if (chk.success && chk.hasPasswordConfigured !== undefined) {
           setHasPasswordConfigured(chk.hasPasswordConfigured);
         }
       }).catch(() => {});
-    }
 
-    // If Google Sheet is configured, pull live data - Google Sheets is the persistent source of truth
-    if (config.webAppUrl && config.webAppUrl.trim().length > 0) {
+      // Pull live data - Google Sheets is the persistent source of truth
       setIsSyncing(true);
       fetchFromGoogleSheets(config.webAppUrl)
         .then((res) => {
@@ -246,6 +271,9 @@ export default function App() {
     const resetInactivityTimer = () => {
       if (timeoutId) clearTimeout(timeoutId);
       timeoutId = setTimeout(() => {
+        if (typeof window !== 'undefined') {
+          sessionStorage.removeItem('dashboard_session_active');
+        }
         setIsLocked(true);
         showToast(t.autoLockNotice, 'info');
       }, INACTIVITY_TIMEOUT_MS);
@@ -294,6 +322,9 @@ export default function App() {
     try {
       const res = await verifyDashboardPassword(sheetsConfig.webAppUrl, enteredPassword);
       if (res.verified) {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('dashboard_session_active', 'true');
+        }
         setIsLocked(false);
         setHasPasswordConfigured(true);
         return { success: true };
@@ -320,6 +351,11 @@ export default function App() {
     try {
       const res = await setDashboardPassword(sheetsConfig.webAppUrl, { newPassword });
       if (res.success) {
+        if (typeof window !== 'undefined') {
+          sessionStorage.setItem('dashboard_session_active', 'true');
+        }
+        markFirstTimeSetupCompleted();
+        setIsSetupComplete(true);
         setHasPasswordConfigured(true);
         setIsLocked(false);
         showToast(t.passwordSetSuccess, 'success');
@@ -329,6 +365,54 @@ export default function App() {
       }
     } catch (err: any) {
       return { success: false, error: err.message || 'Error communicating with Google Sheets' };
+    }
+  };
+
+  const handleFirstTimeSetupComplete = async (completedWebAppUrl: string) => {
+    // 1. Mark setup as permanently completed
+    markFirstTimeSetupCompleted();
+    setIsSetupComplete(true);
+
+    // 2. Mark current browser session as active (so reload keeps user in dashboard)
+    if (typeof window !== 'undefined') {
+      sessionStorage.setItem('dashboard_session_active', 'true');
+    }
+
+    // 3. Update Sheets config
+    const updatedConfig: GoogleSheetsConfig = {
+      ...sheetsConfig,
+      webAppUrl: completedWebAppUrl,
+      status: 'connected',
+      lastSyncedAt: new Date().toISOString(),
+    };
+    setSheetsConfig(updatedConfig);
+    saveSheetsConfig(updatedConfig);
+
+    // 4. Update password and unlock states
+    setHasPasswordConfigured(true);
+    setIsLocked(false);
+    showToast(t.setupCompletedNotice, 'success');
+
+    // 5. Pull initial data from the connected spreadsheet
+    setIsSyncing(true);
+    try {
+      const res = await fetchFromGoogleSheets(completedWebAppUrl);
+      if (res.success) {
+        if (res.branding) {
+          setBranding(res.branding);
+          setActiveCurrency(res.branding.currency, res.branding.customCurrencySymbol);
+          saveStoredBranding(res.branding);
+        }
+        if (res.clients) setClients(res.clients);
+        if (res.categories) setCategories(res.categories);
+        if (res.applicationStatuses && res.applicationStatuses.length > 0) {
+          setApplicationStatuses(res.applicationStatuses);
+        }
+      }
+    } catch (e) {
+      console.warn('Initial setup data pull:', e);
+    } finally {
+      setIsSyncing(false);
     }
   };
 
@@ -1067,6 +1151,54 @@ export default function App() {
     }
   };
 
+  // 1. First-time open: If initial setup is incomplete, show FirstTimeSetup wizard
+  if (!isSetupComplete) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors">
+        <FirstTimeSetup
+          branding={branding}
+          config={sheetsConfig}
+          onSetupComplete={handleFirstTimeSetupComplete}
+          lang={lang}
+          onLanguageChange={handleLanguageChange}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+
+        {/* Toast Notification */}
+        {toast && (
+          <div className="fixed bottom-5 right-5 z-50 animate-in slide-in-from-bottom-5 duration-200">
+            <div
+              className={`flex items-center space-x-2.5 px-4 py-3 rounded-xl shadow-lg border text-xs font-medium ${
+                toast.type === 'success'
+                  ? 'bg-emerald-900 text-emerald-100 border-emerald-800'
+                  : toast.type === 'error'
+                  ? 'bg-rose-900 text-rose-100 border-rose-800'
+                  : 'bg-slate-900 text-slate-100 border-slate-800'
+              }`}
+            >
+              {toast.type === 'success' ? (
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+              ) : toast.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
+              ) : (
+                <Info className="w-4 h-4 text-blue-400 shrink-0" />
+              )}
+              <span>{toast.message}</span>
+              <button
+                onClick={() => setToast(null)}
+                className="ml-2 text-slate-400 hover:text-white cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // 2. Setup completed: Check if Dashboard is currently locked
   if (isLocked) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors">
@@ -1138,7 +1270,12 @@ export default function App() {
         lang={lang}
         onLanguageChange={handleLanguageChange}
         onOpenBrandingModal={() => setIsBrandingModalOpen(true)}
-        onLockApp={() => setIsLocked(true)}
+        onLockApp={() => {
+          if (typeof window !== 'undefined') {
+            sessionStorage.removeItem('dashboard_session_active');
+          }
+          setIsLocked(true);
+        }}
         onOpenSheetsModal={() => setIsSheetsModalOpen(true)}
         onQuickSync={sheetsConfig.status === 'connected' ? handlePullFromSheet : () => setIsSheetsModalOpen(true)}
         isSyncing={isSyncing}

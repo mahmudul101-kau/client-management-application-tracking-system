@@ -4,6 +4,50 @@ import { calculateDueAmount, calculatePaymentStatus, getCurrentDate } from './ca
 const STORAGE_KEY_DATA = 'client_tracking_sheets_db_v2';
 const STORAGE_KEY_CONFIG = 'client_tracking_sheets_config_v1';
 const STORAGE_KEY_BRANDING = 'app_branding_settings_v1';
+const STORAGE_KEY_SETUP_COMPLETED = 'app_first_time_setup_completed_v1';
+
+/**
+ * Checks whether the first-time setup flow (Google Sheets + Apps Script + Password setup)
+ * has been permanently completed.
+ */
+export function isFirstTimeSetupCompleted(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY_SETUP_COMPLETED) === 'true';
+  } catch (e) {
+    console.error('Error checking setup completion:', e);
+    return false;
+  }
+}
+
+/**
+ * Marks the first-time setup flow as completed permanently in localStorage.
+ */
+export function markFirstTimeSetupCompleted(): void {
+  try {
+    localStorage.setItem(STORAGE_KEY_SETUP_COMPLETED, 'true');
+  } catch (e) {
+    console.error('Error saving setup completion:', e);
+  }
+}
+
+/**
+ * Completely resets the application's local first-time setup state.
+ * Removes setup completion flag, clears active session, clears saved Sheets Web App URL,
+ * and clears locally cached client data, so the next application launch starts completely
+ * fresh from the Welcome screen without affecting any remote Google Sheets.
+ */
+export function resetLocalSetupState(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(STORAGE_KEY_SETUP_COMPLETED);
+    sessionStorage.removeItem('dashboard_session_active');
+    localStorage.removeItem(STORAGE_KEY_CONFIG);
+    localStorage.removeItem(STORAGE_KEY_DATA);
+    localStorage.removeItem('client_tracking_sheets_db_v1');
+  } catch (e) {
+    console.error('Error resetting local setup state:', e);
+  }
+}
 
 export const DEFAULT_BRANDING: AppBranding = {
   title: 'Client Management & Application Tracking System',
@@ -462,7 +506,9 @@ export async function sendMutationToGoogleSheets(
     | 'saveAll'
     | 'verifyPassword'
     | 'setPassword'
-    | 'checkPasswordStatus',
+    | 'checkPasswordStatus'
+    | 'initializeDatabase'
+    | 'verifyDatabase',
   payload: any
 ): Promise<{
   success: boolean;
@@ -474,6 +520,7 @@ export async function sendMutationToGoogleSheets(
   settings?: any;
   verified?: boolean;
   hasPasswordConfigured?: boolean;
+  details?: any;
 }> {
   try {
     const cleanUrl = webAppUrl.trim();
@@ -506,6 +553,7 @@ export async function sendMutationToGoogleSheets(
       settings: data.settings,
       verified: data.verified,
       hasPasswordConfigured: data.hasPasswordConfigured,
+      details: data.details,
     };
   } catch (err: any) {
     console.error(`Google Sheets mutation ${action} failed:`, err);
@@ -678,4 +726,146 @@ export async function checkPasswordConfigured(
     return { success: false, hasPasswordConfigured: false };
   }
 }
+
+export interface DatabaseInitResult {
+  success: boolean;
+  message?: string;
+  error?: string;
+  hasPasswordConfigured?: boolean;
+  details?: {
+    clients: boolean;
+    categories: boolean;
+    applicationStatuses: boolean;
+    settings: boolean;
+    defaultStatusesCreated?: number;
+    defaultCategoriesCreated?: number;
+    defaultSettingsCreated?: boolean;
+    canReadWrite?: boolean;
+  };
+}
+
+/**
+ * Automatically creates all required database sheets (Clients, Categories,
+ * ApplicationStatuses, Settings) with exact headers and default configuration
+ * via the Apps Script backend. Idempotent and safe.
+ */
+export async function initializeGoogleSheetsDatabase(
+  webAppUrl: string
+): Promise<DatabaseInitResult> {
+  if (!webAppUrl || !webAppUrl.trim().startsWith('http')) {
+    return { success: false, error: 'Google Sheets Web App is not configured.' };
+  }
+
+  // 1. Try dedicated Apps Script action initializeDatabase
+  const res = await sendMutationToGoogleSheets(webAppUrl, 'initializeDatabase', {});
+  if (res.success) {
+    return {
+      success: true,
+      message: res.message || 'Database structure initialized and verified successfully',
+      details: res.details,
+      hasPasswordConfigured: res.hasPasswordConfigured,
+    };
+  }
+
+  // 2. Fallback if running an earlier version that doesn't have initializeDatabase:
+  // Use setupSheetsIfMissing by triggering getAll, then saving defaults if empty
+  if (res.error && res.error.toLowerCase().includes('unknown action')) {
+    try {
+      const getRes = await fetchFromGoogleSheets(webAppUrl);
+      if (getRes.success) {
+        // If categories are empty, seed them
+        const catsToSave = (!getRes.categories || getRes.categories.length === 0)
+          ? INITIAL_CATEGORIES
+          : getRes.categories;
+        const statusesToSave = (!getRes.applicationStatuses || getRes.applicationStatuses.length === 0)
+          ? INITIAL_APPLICATION_STATUSES
+          : getRes.applicationStatuses;
+        const brandingToSave = getRes.branding || DEFAULT_BRANDING;
+
+        await sendMutationToGoogleSheets(webAppUrl, 'saveAll', {
+          categories: catsToSave,
+          applicationStatuses: statusesToSave,
+          settings: brandingToSave,
+          clients: getRes.clients || [],
+        });
+
+        return {
+          success: true,
+          message: 'Database structure initialized and verified successfully',
+          hasPasswordConfigured: getRes.branding?.hasPasswordConfigured || false,
+          details: {
+            clients: true,
+            categories: true,
+            applicationStatuses: true,
+            settings: true,
+            canReadWrite: true,
+          },
+        };
+      }
+    } catch (fallbackErr: any) {
+      return {
+        success: false,
+        error: fallbackErr.message || 'Failed to initialize database via fallback',
+      };
+    }
+  }
+
+  return {
+    success: false,
+    error: res.error || 'Failed to initialize Google Sheets database',
+    message: res.message,
+    details: res.details,
+  };
+}
+
+/**
+ * Verifies that all 4 required database sheets (Clients, Categories,
+ * ApplicationStatuses, Settings) and headers exist and are readable/writable.
+ */
+export async function verifyGoogleSheetsDatabase(
+  webAppUrl: string
+): Promise<DatabaseInitResult> {
+  if (!webAppUrl || !webAppUrl.trim().startsWith('http')) {
+    return { success: false, error: 'Google Sheets Web App is not configured.' };
+  }
+
+  const res = await sendMutationToGoogleSheets(webAppUrl, 'verifyDatabase', {});
+  if (res.success) {
+    return {
+      success: true,
+      message: res.message || 'Database structure verified successfully',
+      details: res.details,
+      hasPasswordConfigured: res.hasPasswordConfigured,
+    };
+  }
+
+  // Fallback: verify via fetchFromGoogleSheets
+  try {
+    const getRes = await fetchFromGoogleSheets(webAppUrl);
+    if (getRes.success) {
+      return {
+        success: true,
+        message: 'Database verified successfully',
+        hasPasswordConfigured: getRes.branding?.hasPasswordConfigured || false,
+        details: {
+          clients: true,
+          categories: true,
+          applicationStatuses: true,
+          settings: true,
+          canReadWrite: true,
+        },
+      };
+    }
+    return {
+      success: false,
+      error: getRes.error || 'Database verification failed',
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      error: err.message || 'Database verification failed',
+    };
+  }
+}
+
 

@@ -37,6 +37,7 @@ export interface AppBranding {
   logoUrl?: string;
   currency?: string;
   customCurrencySymbol?: string;
+  hasPasswordConfigured?: boolean;
 }
 
 export interface DashboardStats {

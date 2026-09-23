@@ -174,6 +174,36 @@ export interface Translations {
   noPasswordConfigured: string;
   setPassword: string;
   updatePassword: string;
+  // Setup Wizard
+  welcomeToApp: string;
+  setupRequiredTitle: string;
+  setupRequiredDesc: string;
+  startSetup: string;
+  stepGoogleSheets: string;
+  stepAppsScript: string;
+  stepInitDatabase: string;
+  stepPasswordSetup: string;
+  connectGoogleSheetsTitle: string;
+  connectGoogleSheetsDesc: string;
+  testConnection: string;
+  testingConnection: string;
+  connectionSuccessful: string;
+  connectionFailed: string;
+  continueToInit: string;
+  initDatabaseTitle: string;
+  initDatabaseDesc: string;
+  initializeDatabaseButton: string;
+  initializingDatabase: string;
+  verifyingStructure: string;
+  initSuccessTitle: string;
+  initSuccessDesc: string;
+  retryInit: string;
+  continueToPassword: string;
+  createDashboardPasswordTitle: string;
+  createDashboardPasswordDesc: string;
+  finishSetupAndEnter: string;
+  creatingPassword: string;
+  setupCompletedNotice: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -340,6 +370,35 @@ export const translations: Record<Language, Translations> = {
     noPasswordConfigured: 'No Password Configured',
     setPassword: 'Set Password',
     updatePassword: 'Update Password',
+    welcomeToApp: 'Welcome to',
+    setupRequiredTitle: 'Initial Setup Required',
+    setupRequiredDesc: 'Before using the system, connect your Google Sheets database and set up your secure Dashboard password.',
+    startSetup: 'Start Setup',
+    stepGoogleSheets: 'Connect Google Sheet',
+    stepAppsScript: 'Apps Script Integration',
+    stepInitDatabase: 'Initialize Database',
+    stepPasswordSetup: 'Create Password',
+    connectGoogleSheetsTitle: 'Connect Google Sheets & Apps Script',
+    connectGoogleSheetsDesc: 'Connect your Google Sheets spreadsheet database via Google Apps Script Web App for persistent cloud storage.',
+    testConnection: 'Test Connection',
+    testingConnection: 'Testing connection...',
+    connectionSuccessful: 'Connection successful! Google Sheet database is ready.',
+    connectionFailed: 'Connection failed. Please check the Web App URL and permissions.',
+    continueToInit: 'Continue to Database Setup',
+    initDatabaseTitle: 'Initialize Application Database',
+    initDatabaseDesc: 'The application will automatically create all required sheets, columns, default settings, and database structure. You do not need to create anything manually.',
+    initializeDatabaseButton: 'Initialize Database',
+    initializingDatabase: 'Creating database & sheets...',
+    verifyingStructure: 'Verifying structure...',
+    initSuccessTitle: 'Database Ready!',
+    initSuccessDesc: 'All sheets (Clients, Categories, ApplicationStatuses, Settings) and headers have been verified.',
+    retryInit: 'Retry Initialization',
+    continueToPassword: 'Continue to Password Setup',
+    createDashboardPasswordTitle: 'Create Dashboard Password',
+    createDashboardPasswordDesc: 'Set a secure password to protect your client management system. Passwords are saved as cryptographic salted SHA-256 hashes.',
+    finishSetupAndEnter: 'Finish Setup & Enter Dashboard',
+    creatingPassword: 'Securing password...',
+    setupCompletedNotice: 'Setup completed! Welcome to your Dashboard.',
   },
   bn: {
     dashboard: 'ড্যাশবোর্ড',
@@ -504,6 +563,35 @@ export const translations: Record<Language, Translations> = {
     noPasswordConfigured: 'কোনো পাসওয়ার্ড কনফিগার করা নেই',
     setPassword: 'পাসওয়ার্ড সেট করুন',
     updatePassword: 'পাসওয়ার্ড আপডেট করুন',
+    welcomeToApp: 'স্বাগতম',
+    setupRequiredTitle: 'প্রাথমিক সেটআপ আবশ্যক',
+    setupRequiredDesc: 'অ্যাপ্লিকেশন ব্যবহারের পূর্বে আপনার গুগল শিট ডাটাবেজ সংযুক্ত করুন এবং একটি সুরক্ষিত ড্যাশবোর্ড পাসওয়ার্ড তৈরি করুন।',
+    startSetup: 'সেটআপ শুরু করুন',
+    stepGoogleSheets: 'গুগল শিট সংযোগ',
+    stepAppsScript: 'অ্যাপস স্ক্রিপ্ট ইন্টিগ্রেশন',
+    stepInitDatabase: 'ডাটাবেজ ইনিশিয়ালাইজ',
+    stepPasswordSetup: 'পাসওয়ার্ড তৈরি',
+    connectGoogleSheetsTitle: 'গুগল শিট ও অ্যাপস স্ক্রিপ্ট সংযোগ',
+    connectGoogleSheetsDesc: 'স্থায়ী ক্লাউড স্টোরেজের জন্য গুগল অ্যাপস স্ক্রিপ্ট ওয়েব অ্যাপের মাধ্যমে আপনার গুগল স্প্রেডশিট ডাটাবেজ সংযুক্ত করুন।',
+    testConnection: 'সংযোগ পরীক্ষা করুন',
+    testingConnection: 'সংযোগ পরীক্ষা করা হচ্ছে...',
+    connectionSuccessful: 'সংযোগ সফল হয়েছে! গুগল শিট ডাটাবেজ প্রস্তুত।',
+    connectionFailed: 'সংযোগ ব্যর্থ হয়েছে। ওয়েব অ্যাপ ইউআরএল এবং অ্যাক্সেস অনুমতি যাচাই করুন।',
+    continueToInit: 'ডাটাবেজ সেটআপে এগিয়ে যান',
+    initDatabaseTitle: 'অ্যাপ্লিকেশন ডাটাবেজ ইনিশিয়ালাইজ করুন',
+    initDatabaseDesc: 'অ্যাপ্লিকেশনটি স্বয়ংক্রিয়ভাবে প্রয়োজনীয় সকল শিট, কলাম হেডার, ডিফল্ট সেটিংস এবং ডাটাবেজ কাঠামো তৈরি করবে। আপনাকে ম্যানুয়ালি কিছু তৈরি করতে হবে না।',
+    initializeDatabaseButton: 'ডাটাবেজ ইনিশিয়ালাইজ করুন',
+    initializingDatabase: 'ডাটাবেজ ও শিট তৈরি হচ্ছে...',
+    verifyingStructure: 'কাঠামো যাচাই করা হচ্ছে...',
+    initSuccessTitle: 'ডাটাবেজ প্রস্তুত!',
+    initSuccessDesc: 'সকল প্রয়োজনীয় শিট (Clients, Categories, ApplicationStatuses, Settings) ও হেডার সফলভাবে তৈরি ও যাচাই করা হয়েছে।',
+    retryInit: 'পুনরায় চেষ্টা করুন',
+    continueToPassword: 'পাসওয়ার্ড সেটআপে এগিয়ে যান',
+    createDashboardPasswordTitle: 'ড্যাশবোর্ড পাসওয়ার্ড তৈরি করুন',
+    createDashboardPasswordDesc: 'আপনার ক্লায়েন্ট ব্যবস্থাপনা সিস্টেম সুরক্ষিত রাখতে একটি পাসওয়ার্ড দিন। পাসওয়ার্ডটি ক্রিপ্টোগ্রাফিক সল্টেড SHA-256 হ্যাশ হিসেবে সংরক্ষিত হয়।',
+    finishSetupAndEnter: 'সেটআপ সম্পন্ন করুন ও ড্যাশবোর্ডে প্রবেশ করুন',
+    creatingPassword: 'পাসওয়ার্ড সুরক্ষিত করা হচ্ছে...',
+    setupCompletedNotice: 'সেটআপ সফলভাবে সম্পন্ন হয়েছে! ড্যাশবোর্ডে স্বাগতম।',
   },
 };
 
