@@ -1,0 +1,7 @@
+{
+  "name": "Client Management and Application Tracking System",
+  "description": "A simple, professional Client Management and Application Tracking System with Google Sheets as the persistent database.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+
