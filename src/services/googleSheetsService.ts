@@ -614,6 +614,16 @@ export async function verifyDashboardPassword(
 
   const res = await sendMutationToGoogleSheets(webAppUrl, 'verifyPassword', { password });
 
+  // Handle specific Google Sheets / Apps Script Web App reachability errors (e.g. 404, DNS, invalid deployment URL)
+  if (res.error && res.error.includes('HTTP Error 404')) {
+    return {
+      success: false,
+      verified: false,
+      hasPasswordConfigured: true,
+      error: 'Google Apps Script Web App returned HTTP 404 Not Found. Your configured Web App URL is invalid or no longer exists. Please click "Database Settings" below or in the top right to verify or update your Web App URL.',
+    };
+  }
+
   // If the deployed Apps Script Web App is running an older deployment that predates verifyPassword:
   if (res.error && res.error.toLowerCase().includes('unknown action')) {
     return {

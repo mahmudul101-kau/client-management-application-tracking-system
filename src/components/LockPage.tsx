@@ -13,7 +13,8 @@ import {
   Moon, 
   FileSpreadsheet,
   Link2,
-  Sparkles
+  Sparkles,
+  Database
 } from 'lucide-react';
 import { AppBranding, Language, ThemeMode } from '../types';
 import { translations } from '../services/translations';
@@ -216,6 +217,18 @@ export const LockPage: React.FC<LockPageProps> = ({
               <Moon className="w-4 h-4 text-slate-600" />
             )}
           </button>
+
+          {/* Database / Sheets Configuration Button */}
+          <button
+            id="lock-sheets-modal-btn"
+            type="button"
+            onClick={onOpenSheetsModal}
+            title={lang === 'bn' ? 'ডাটাবেজ ও গুগল শিট সেটিংস' : 'Database & Google Sheets Settings'}
+            className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80 shadow-2xs transition-all cursor-pointer text-xs font-semibold"
+          >
+            <Database className="w-3.5 h-3.5 text-emerald-500" />
+            <span className="hidden sm:inline">{lang === 'bn' ? 'ডাটাবেজ' : 'Database'}</span>
+          </button>
         </div>
       </header>
 
@@ -295,10 +308,24 @@ export const LockPage: React.FC<LockPageProps> = ({
               <div 
                 id="lock-error-banner"
                 role="alert"
-                className="mb-5 p-3 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200/90 dark:border-red-900/70 flex items-start space-x-2.5 text-red-700 dark:text-red-300 text-xs sm:text-sm shadow-2xs transition-all"
+                className="mb-5 p-3.5 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200/90 dark:border-red-900/70 flex flex-col space-y-2 text-red-700 dark:text-red-300 text-xs sm:text-sm shadow-2xs transition-all"
               >
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500 dark:text-red-400" />
-                <span className="font-medium flex-1">{errorMessage}</span>
+                <div className="flex items-start space-x-2.5">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500 dark:text-red-400" />
+                  <span className="font-medium flex-1 leading-relaxed">{errorMessage}</span>
+                </div>
+                {(errorMessage.includes('404') || errorMessage.toLowerCase().includes('google apps script') || errorMessage.toLowerCase().includes('not configured')) && (
+                  <div className="pt-1.5 pl-6 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={onOpenSheetsModal}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 active:scale-95 text-white font-semibold text-xs shadow-2xs transition-all cursor-pointer"
+                    >
+                      <Database className="w-3.5 h-3.5" />
+                      <span>{lang === 'bn' ? 'গুগল শিট ইউআরএল ঠিক করুন' : 'Fix Google Sheets Web App URL'}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
 
