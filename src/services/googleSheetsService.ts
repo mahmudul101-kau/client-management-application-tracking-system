@@ -181,25 +181,73 @@ export interface StoredData {
 }
 
 /**
- * Loads persistent configuration from localStorage
+ * Loads persistent configuration from localStorage, URL params, or build environment variables.
+ * Enables shared links and multi-device access without forcing First-Time Setup.
  */
 export function loadSheetsConfig(): GoogleSheetsConfig {
+  let webAppUrl = '';
+  let status: GoogleSheetsConfig['status'] = 'not_configured';
+  let sheetName: string | undefined = undefined;
+  let lastSyncedAt: string | null = null;
+
+  // 1. Check persistent localStorage first
   try {
     const raw = localStorage.getItem(STORAGE_KEY_CONFIG);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && parsed.webAppUrl) {
-        parsed.webAppUrl = normalizeWebAppUrl(parsed.webAppUrl);
+        webAppUrl = normalizeWebAppUrl(parsed.webAppUrl);
+        status = parsed.status || (webAppUrl ? 'connected' : 'not_configured');
+        sheetName = parsed.sheetName;
+        lastSyncedAt = parsed.lastSyncedAt || null;
       }
-      return parsed;
     }
   } catch (e) {
     console.error('Error reading sheets config:', e);
   }
+
+  // 2. Check URL query parameters (?webapp=..., ?script=..., ?url=...) for seamless link sharing
+  if (typeof window !== 'undefined') {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryParamUrl = urlParams.get('webapp') || urlParams.get('script') || urlParams.get('url') || urlParams.get('sheet');
+      if (queryParamUrl && queryParamUrl.trim().startsWith('http')) {
+        webAppUrl = normalizeWebAppUrl(queryParamUrl);
+        status = 'connected';
+        // Persist to localStorage for future reloads and navigation
+        localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify({
+          webAppUrl,
+          status: 'connected',
+          lastSyncedAt: new Date().toISOString()
+        }));
+      }
+    } catch (err) {
+      console.warn('Could not parse URL query parameters:', err);
+    }
+  }
+
+  // 3. Check Vercel/Vite environment variables if not present in localStorage
+  if (!webAppUrl) {
+    const envUrl = (
+      (typeof import.meta !== 'undefined' && import.meta.env && (
+        import.meta.env.VITE_GOOGLE_SHEETS_WEB_APP_URL ||
+        import.meta.env.VITE_APPS_SCRIPT_URL ||
+        import.meta.env.VITE_SHEETS_URL ||
+        import.meta.env.VITE_WEB_APP_URL
+      )) || ''
+    ).trim();
+
+    if (envUrl && envUrl.startsWith('http')) {
+      webAppUrl = normalizeWebAppUrl(envUrl);
+      status = 'connected';
+    }
+  }
+
   return {
-    webAppUrl: '',
-    status: 'not_configured',
-    lastSyncedAt: null,
+    webAppUrl,
+    sheetName,
+    status: webAppUrl ? (status || 'connected') : 'not_configured',
+    lastSyncedAt,
   };
 }
 
@@ -335,6 +383,7 @@ export async function testGoogleSheetsConnection(webAppUrl: string): Promise<{
   clientsCount?: number;
   categoriesCount?: number;
   statusesCount?: number;
+  hasPasswordConfigured?: boolean;
   message?: string;
   error?: string;
 }> {
@@ -366,6 +415,7 @@ export async function testGoogleSheetsConnection(webAppUrl: string): Promise<{
         clientsCount: json.clientsCount,
         categoriesCount: json.categoriesCount,
         statusesCount: json.statusesCount,
+        hasPasswordConfigured: Boolean(json.hasPasswordConfigured),
         message: json.message || 'Connected successfully!',
       };
     } else {
@@ -754,18 +804,33 @@ export async function checkPasswordConfigured(
       headers: { 'Accept': 'application/json' },
     });
 
-    if (!res.ok) {
-      return { success: false, hasPasswordConfigured: false };
+    if (res.ok) {
+      const data = await res.json();
+      if (data.hasPasswordConfigured !== undefined) {
+        return {
+          success: !!data.success,
+          hasPasswordConfigured: Boolean(data.hasPasswordConfigured),
+        };
+      }
     }
-
-    const data = await res.json();
-    return {
-      success: !!data.success,
-      hasPasswordConfigured: Boolean(data.hasPasswordConfigured),
-    };
-  } catch {
-    return { success: false, hasPasswordConfigured: false };
+  } catch (err) {
+    console.warn('GET checkPasswordStatus failed, trying POST fallback:', err);
   }
+
+  // Fallback via POST mutation
+  try {
+    const postRes = await sendMutationToGoogleSheets(webAppUrl, 'checkPasswordStatus', {});
+    if (postRes.hasPasswordConfigured !== undefined) {
+      return {
+        success: !!postRes.success,
+        hasPasswordConfigured: Boolean(postRes.hasPasswordConfigured),
+      };
+    }
+  } catch (postErr) {
+    console.warn('POST checkPasswordStatus failed:', postErr);
+  }
+
+  return { success: false, hasPasswordConfigured: false };
 }
 
 export interface DatabaseInitResult {

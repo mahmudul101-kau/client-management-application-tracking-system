@@ -66,6 +66,19 @@ function handleRequest(e) {
       response.clientsCount = Math.max(0, getClientsSheet(ss).getLastRow() - 1);
       response.categoriesCount = Math.max(0, getCategoriesSheet(ss).getLastRow() - 1);
       response.statusesCount = Math.max(0, getStatusesSheet(ss).getLastRow() - 1);
+
+      // Check if dashboard password is configured
+      var sSheet = ss.getSheetByName('Settings');
+      var testHasPass = false;
+      if (sSheet && sSheet.getLastRow() > 1) {
+        var sVals = sSheet.getRange(2, 1, sSheet.getLastRow() - 1, 2).getValues();
+        for (var st = 0; st < sVals.length; st++) {
+          if (String(sVals[st][0] || '').trim() === 'dashboard_password_hash') {
+            testHasPass = String(sVals[st][1] || '').trim().length > 0;
+          }
+        }
+      }
+      response.hasPasswordConfigured = testHasPass;
     } else if (actionLower === 'getall' || actionLower === 'readall') {
       response.clients = readClients(ss);
       response.categories = readCategories(ss);
@@ -214,12 +227,12 @@ function handleRequest(e) {
           var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
           for (var sv = 0; sv < sVals.length; sv++) {
             var sk = String(sVals[sv][0] || '').trim();
-            if (sk === 'dashboard_password_hash') storedHash = String(sVals[sv][1] || '');
-            if (sk === 'dashboard_password_salt') storedSalt = String(sVals[sv][1] || '');
+            if (sk === 'dashboard_password_hash') storedHash = String(sVals[sv][1] || '').trim();
+            if (sk === 'dashboard_password_salt') storedSalt = String(sVals[sv][1] || '').trim();
           }
         }
         // If a password already exists, require valid currentPassword
-        if (storedHash) {
+        if (storedHash && storedHash.length > 0) {
           if (!currentPassword) {
             response.success = false;
             response.error = 'Current password is required';
@@ -256,11 +269,11 @@ function handleRequest(e) {
         var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
         for (var sv = 0; sv < sVals.length; sv++) {
           var sk = String(sVals[sv][0] || '').trim();
-          if (sk === 'dashboard_password_hash') storedHash = String(sVals[sv][1] || '');
+          if (sk === 'dashboard_password_hash') storedHash = String(sVals[sv][1] || '').trim();
         }
       }
       response.success = true;
-      response.hasPasswordConfigured = !!storedHash;
+      response.hasPasswordConfigured = Boolean(storedHash && storedHash.length > 0);
     } else if (action === 'initializeDatabase' || actionLower === 'initializedatabase' || actionLower === 'initdatabase') {
       var initResult = runDatabaseInitialization(ss);
       response.success = initResult.success;

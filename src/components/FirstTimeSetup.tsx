@@ -29,6 +29,7 @@ import {
   setDashboardPassword,
   initializeGoogleSheetsDatabase,
   verifyGoogleSheetsDatabase,
+  checkPasswordConfigured,
   DatabaseInitResult
 } from '../services/googleSheetsService';
 
@@ -104,6 +105,18 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
       if (res.success) {
         setConnectionStatus('success');
         setConnectedSheetName(res.sheetName || 'Google Spreadsheet');
+
+        // If backend already has a dashboard password configured, complete setup immediately
+        if (res.hasPasswordConfigured) {
+          onSetupComplete(cleanUrl);
+          return;
+        }
+
+        const passChk = await checkPasswordConfigured(cleanUrl);
+        if (passChk.success && passChk.hasPasswordConfigured) {
+          onSetupComplete(cleanUrl);
+          return;
+        }
       } else {
         setConnectionStatus('error');
         setConnectionError(res.error || t.connectionFailed);
@@ -133,6 +146,12 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
         return;
       }
 
+      // If backend already has a password configured, complete setup immediately
+      if (initRes.hasPasswordConfigured) {
+        onSetupComplete(cleanUrl);
+        return;
+      }
+
       setInitDetails(initRes.details);
       setInitStage('verifying');
 
@@ -141,6 +160,11 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
       if (!verifyRes.success) {
         setInitStage('error');
         setInitError(verifyRes.error || 'Database verification failed. Please check spreadsheet access permissions.');
+        return;
+      }
+
+      if (verifyRes.hasPasswordConfigured) {
+        onSetupComplete(cleanUrl);
         return;
       }
 
@@ -192,6 +216,17 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
         setTimeout(() => {
           onSetupComplete(webAppUrl.trim());
         }, 800);
+      } else if (res.error && res.error.toLowerCase().includes('current password is required')) {
+        // The connected database ALREADY has an established password configured!
+        // Immediately complete setup and redirect to Lock Page so the user can unlock with their existing password.
+        if (typeof window !== 'undefined') {
+          try {
+            localStorage.setItem('app_first_time_setup_completed_v1', 'true');
+          } catch (e) {
+            console.error('Error persisting setup completion:', e);
+          }
+        }
+        onSetupComplete(webAppUrl.trim());
       } else {
         setPasswordError(res.error || 'Failed to configure password.');
       }

@@ -53,7 +53,7 @@ import { GoogleSheetsModal } from './components/GoogleSheetsModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { ClientPrintPreviewModal } from './components/ClientPrintPreviewModal';
 
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, X, Loader2 } from 'lucide-react';
 
 export default function App() {
   // Navigation tab
@@ -65,10 +65,31 @@ export default function App() {
   const [applicationStatuses, setApplicationStatuses] = useState<ApplicationStatusItem[]>(DEFAULT_APPLICATION_STATUSES);
   const [branding, setBranding] = useState<AppBranding>(DEFAULT_BRANDING);
 
+  // Sheets Config (from localStorage, URL parameters, or environment variables)
+  const [sheetsConfig, setSheetsConfig] = useState<GoogleSheetsConfig>(() => {
+    if (typeof window !== 'undefined') {
+      return loadSheetsConfig();
+    }
+    return {
+      webAppUrl: '',
+      status: 'not_configured',
+      lastSyncedAt: null,
+    };
+  });
+
   // First-time setup state (persisted in localStorage)
   const [isSetupComplete, setIsSetupComplete] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return isFirstTimeSetupCompleted();
+    }
+    return false;
+  });
+
+  // Transient verification state for shared links/new devices to check remote password status before rendering setup
+  const [isVerifyingRemoteSetup, setIsVerifyingRemoteSetup] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const cfg = loadSheetsConfig();
+      return !isFirstTimeSetupCompleted() && Boolean(cfg.webAppUrl && cfg.webAppUrl.trim().startsWith('http'));
     }
     return false;
   });
@@ -91,13 +112,6 @@ export default function App() {
   });
 
   const [hasPasswordConfigured, setHasPasswordConfigured] = useState<boolean>(false);
-
-  // Sheets Config
-  const [sheetsConfig, setSheetsConfig] = useState<GoogleSheetsConfig>({
-    webAppUrl: '',
-    status: 'not_configured',
-    lastSyncedAt: null,
-  });
 
   // Sync State
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
@@ -204,19 +218,34 @@ export default function App() {
     const config = loadSheetsConfig();
     setSheetsConfig(config);
 
-    // Only interact with remote Google Sheets if setup has been completed
-    if (isFirstTimeSetupCompleted() && config.webAppUrl && config.webAppUrl.trim().startsWith('http')) {
-      // Quickly check password configuration status
-      checkPasswordConfigured(config.webAppUrl).then((chk) => {
-        if (chk.success && chk.hasPasswordConfigured !== undefined) {
-          setHasPasswordConfigured(chk.hasPasswordConfigured);
-        }
-      }).catch(() => {});
+    const checkAndSyncBackend = async () => {
+      if (config.webAppUrl && config.webAppUrl.trim().startsWith('http')) {
+        try {
+          // 1. Check whether configured Google Apps Script backend has an existing dashboard password
+          const chk = await checkPasswordConfigured(config.webAppUrl);
+          if (chk.hasPasswordConfigured) {
+            // Backend confirms password is already configured!
+            // Requirement: Treat app as already initialized. Do NOT show First-Time Setup. Show Lock Page.
+            markFirstTimeSetupCompleted();
+            setIsSetupComplete(true);
+            setHasPasswordConfigured(true);
 
-      // Pull live data - Google Sheets is the persistent source of truth
-      setIsSyncing(true);
-      fetchFromGoogleSheets(config.webAppUrl)
-        .then((res) => {
+            const sessionActive = sessionStorage.getItem('dashboard_session_active') === 'true';
+            setIsLocked(!sessionActive);
+          } else if (!isFirstTimeSetupCompleted()) {
+            // Truly uninitialized database with no password configured
+            setIsSetupComplete(false);
+          }
+        } catch (chkErr) {
+          console.warn('Initial password status check error:', chkErr);
+        } finally {
+          setIsVerifyingRemoteSetup(false);
+        }
+
+        // 2. Pull live data & branding - Google Sheets is the persistent source of truth
+        setIsSyncing(true);
+        try {
+          const res = await fetchFromGoogleSheets(config.webAppUrl);
           if (res.success) {
             if (res.hasPasswordConfigured !== undefined) {
               setHasPasswordConfigured(Boolean(res.hasPasswordConfigured));
@@ -251,14 +280,17 @@ export default function App() {
             setSheetsConfig(updatedConfig);
             saveSheetsConfig(updatedConfig);
           }
-        })
-        .catch((err) => {
+        } catch (err) {
           console.warn('Initial sheets fetch failed, using local storage cache:', err);
-        })
-        .finally(() => {
+        } finally {
           setIsSyncing(false);
-        });
-    }
+        }
+      } else {
+        setIsVerifyingRemoteSetup(false);
+      }
+    };
+
+    checkAndSyncBackend();
   }, []);
 
   // 2. 10-Minute Inactivity Auto-Lock
@@ -329,6 +361,31 @@ export default function App() {
         }
         setIsLocked(false);
         setHasPasswordConfigured(true);
+
+        // Refresh live data from Google Sheets in background upon successful unlock
+        if (sheetsConfig.webAppUrl) {
+          fetchFromGoogleSheets(sheetsConfig.webAppUrl).then((fetchRes) => {
+            if (fetchRes.success) {
+              if (fetchRes.branding) {
+                setBranding(fetchRes.branding);
+                setActiveCurrency(fetchRes.branding.currency, fetchRes.branding.customCurrencySymbol);
+                saveStoredBranding(fetchRes.branding);
+              }
+              if (fetchRes.clients) setClients(fetchRes.clients);
+              if (fetchRes.categories) setCategories(fetchRes.categories);
+              if (fetchRes.applicationStatuses && fetchRes.applicationStatuses.length > 0) {
+                setApplicationStatuses(fetchRes.applicationStatuses);
+              }
+              saveLocalData({
+                clients: fetchRes.clients || clients,
+                categories: fetchRes.categories || categories,
+                applicationStatuses: fetchRes.applicationStatuses || applicationStatuses,
+                branding: fetchRes.branding || branding,
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }).catch(() => {});
+        }
         return { success: true };
       } else {
         return {
@@ -1152,6 +1209,27 @@ export default function App() {
       setIsSyncing(false);
     }
   };
+
+  // 0. Remote verification splash: When verifying if the configured remote Google Sheet has an established password
+  if (isVerifyingRemoteSetup) {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4 transition-colors">
+        <div className="flex flex-col items-center space-y-4 max-w-sm text-center">
+          <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-600/25 animate-pulse">
+            <Loader2 className="w-6 h-6 animate-spin" />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+              {branding.title || 'Client Management & Application Tracking'}
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">
+              {lang === 'bn' ? 'ডাটাবেজের সাথে সংযোগ পরীক্ষা করা হচ্ছে...' : 'Verifying connection to database...'}
+            </p>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // 1. First-time open: If initial setup is incomplete, show FirstTimeSetup wizard
   if (!isSetupComplete) {
