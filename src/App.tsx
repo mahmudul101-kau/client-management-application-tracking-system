@@ -51,6 +51,7 @@ import { ApplicationStatusModal } from './components/ApplicationStatusModal';
 import { BrandingSettingsModal } from './components/BrandingSettingsModal';
 import { GoogleSheetsModal } from './components/GoogleSheetsModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
+import { ClientPrintPreviewModal } from './components/ClientPrintPreviewModal';
 
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 
@@ -123,6 +124,7 @@ export default function App() {
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
   const [clientToEdit, setClientToEdit] = useState<Client | null>(null);
   const [selectedClientForDetails, setSelectedClientForDetails] = useState<Client | null>(null);
+  const [selectedClientForPrint, setSelectedClientForPrint] = useState<Client | null>(null);
 
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState(false);
   const [categoryToEdit, setCategoryToEdit] = useState<Category | null>(null);
@@ -1260,7 +1262,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
+    <div className="app-shell min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
       {/* Top Navbar */}
       <Navbar
         activeTab={activeTab}
@@ -1312,6 +1314,7 @@ export default function App() {
             onEditClient={handleOpenEditClient}
             onViewClient={(client) => setSelectedClientForDetails(client)}
             onDeleteClient={handlePromptDeleteClient}
+            onPrintClient={(client) => setSelectedClientForPrint(client)}
             isSyncing={isSyncing}
             lang={lang}
           />
@@ -1395,6 +1398,19 @@ export default function App() {
           setSelectedClientForDetails(null);
           handlePromptDeleteClient(client);
         }}
+        onPrint={(client) => {
+          setSelectedClientForDetails(null);
+          setSelectedClientForPrint(client);
+        }}
+        lang={lang}
+      />
+
+      {/* Client Professional Print Preview Modal */}
+      <ClientPrintPreviewModal
+        isOpen={!!selectedClientForPrint}
+        onClose={() => setSelectedClientForPrint(null)}
+        client={selectedClientForPrint}
+        branding={branding}
         lang={lang}
       />
 

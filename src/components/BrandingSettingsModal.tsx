@@ -17,8 +17,15 @@ import {
   ShieldAlert, 
   AlertCircle,
   Eye,
-  EyeOff
+  EyeOff,
+  Info,
+  GraduationCap,
+  Mail,
+  User,
+  FileSpreadsheet,
+  GitBranch
 } from 'lucide-react';
+import appVersionInfo from '../version.json';
 import { PRESET_CURRENCIES, formatCurrency } from '../services/calculations';
 import { optimizeLogoFile, compressLogoDataUrl } from '../services/imageUtils';
 
@@ -42,7 +49,7 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
   lang,
 }) => {
   const t = translations[lang];
-  const [activeTab, setActiveTab] = useState<'branding' | 'security'>('branding');
+  const [activeTab, setActiveTab] = useState<'branding' | 'security' | 'about'>('branding');
 
   // Branding states
   const [title, setTitle] = useState(branding.title);
@@ -234,6 +241,20 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
             ) : (
               <span className="w-2 h-2 rounded-full bg-amber-500 inline-block" title="Setup Required" />
             )}
+          </button>
+
+          <button
+            id="tab-about-app"
+            type="button"
+            onClick={() => setActiveTab('about')}
+            className={`pb-2.5 px-3 text-xs font-semibold flex items-center gap-1.5 border-b-2 transition-colors cursor-pointer ${
+              activeTab === 'about'
+                ? 'border-slate-900 dark:border-white text-slate-900 dark:text-white'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <Info className="w-3.5 h-3.5 text-blue-500" />
+            <span>{t.aboutThisApp}</span>
           </button>
         </div>
 
@@ -652,6 +673,143 @@ export const BrandingSettingsModal: React.FC<BrandingSettingsModalProps> = ({
               </button>
             </div>
           </form>
+        )}
+
+        {/* Tab 3: About This App */}
+        {activeTab === 'about' && (
+          <div className="p-6 space-y-6 animate-in fade-in-50 duration-150">
+            {/* Dynamic Application Branding Card */}
+            <div className="p-5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/60 flex items-center space-x-4">
+              {branding.logoUrl ? (
+                branding.logoUrl.startsWith('data:') ||
+                branding.logoUrl.startsWith('http://') ||
+                branding.logoUrl.startsWith('https://') ||
+                branding.logoUrl.startsWith('/') ||
+                branding.logoUrl.startsWith('blob:') ? (
+                  <img
+                    src={branding.logoUrl}
+                    alt={branding.title || 'App Logo'}
+                    referrerPolicy="no-referrer"
+                    className="w-14 h-14 rounded-xl object-contain bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 shadow-xs shrink-0 p-1"
+                  />
+                ) : (
+                  <div className="h-14 px-3 rounded-xl bg-slate-900 dark:bg-slate-800 text-emerald-400 flex items-center justify-center font-bold text-sm tracking-wide shadow-xs border border-slate-200 dark:border-slate-700 shrink-0">
+                    {branding.logoUrl}
+                  </div>
+                )
+              ) : (
+                <div className="w-14 h-14 rounded-xl bg-slate-900 dark:bg-slate-800 text-white flex items-center justify-center shadow-xs border border-transparent dark:border-slate-700 shrink-0">
+                  <FileSpreadsheet className="w-7 h-7 text-emerald-400" />
+                </div>
+              )}
+
+              <div className="min-w-0 flex-1">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white tracking-tight truncate">
+                  {branding.title}
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5 line-clamp-2">
+                  {branding.slogan}
+                </p>
+              </div>
+            </div>
+
+            {/* Developer & Creator Details */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                {t.developedBy}
+              </h4>
+
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 divide-y divide-slate-100 dark:divide-slate-800 bg-white dark:bg-slate-900/60 overflow-hidden shadow-2xs">
+                {/* Developer Name */}
+                <div className="p-3.5 flex items-center space-x-3.5">
+                  <div className="w-9 h-9 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 flex items-center justify-center shrink-0 border border-blue-100 dark:border-blue-900">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 block">
+                      {lang === 'bn' ? 'নাম' : 'Name'}
+                    </span>
+                    <span className="text-sm font-bold text-slate-900 dark:text-white">
+                      Mahmudul Hasan Manik
+                    </span>
+                  </div>
+                </div>
+
+                {/* Status / Academic Institution */}
+                <div className="p-3.5 flex items-center space-x-3.5">
+                  <div className="w-9 h-9 rounded-lg bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-100 dark:border-emerald-900">
+                    <GraduationCap className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 block">
+                      {t.developerStatusLabel}
+                    </span>
+                    <span className="text-sm font-semibold text-slate-800 dark:text-slate-200">
+                      Student at King Abdulaziz University, KSA
+                    </span>
+                  </div>
+                </div>
+
+                {/* Email */}
+                <div className="p-3.5 flex items-center space-x-3.5">
+                  <div className="w-9 h-9 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 border border-indigo-100 dark:border-indigo-900">
+                    <Mail className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 block">
+                      {t.developerEmailLabel}
+                    </span>
+                    <a
+                      href="mailto:mmanik@stu.kau.edu.sa"
+                      className="text-sm font-mono font-medium text-indigo-600 dark:text-indigo-400 hover:underline"
+                    >
+                      mmanik@stu.kau.edu.sa
+                    </a>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Application Version Section (Assigned manually from src/version.json) */}
+            <div className="space-y-3">
+              <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                {t.appVersion}
+              </h4>
+
+              <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900/60 p-3.5 flex items-center justify-between shadow-2xs">
+                <div className="flex items-center space-x-3.5 min-w-0">
+                  <div className="w-9 h-9 rounded-lg bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 flex items-center justify-center shrink-0 border border-purple-100 dark:border-purple-900">
+                    <GitBranch className="w-4 h-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <span className="text-[11px] font-medium text-slate-500 dark:text-slate-400 block">
+                      {t.versionNumber}
+                    </span>
+                    <span className="text-sm font-bold font-mono text-slate-900 dark:text-white">
+                      v{appVersionInfo.version}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="text-right shrink-0">
+                  <span className="inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800/80">
+                    Release
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Footer Close Button */}
+            <div className="flex items-center justify-end pt-2 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={onClose}
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 rounded-lg transition-colors cursor-pointer"
+              >
+                {t.close}
+              </button>
+            </div>
+          </div>
         )}
 
       </div>

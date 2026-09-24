@@ -204,6 +204,25 @@ export interface Translations {
   finishSetupAndEnter: string;
   creatingPassword: string;
   setupCompletedNotice: string;
+
+  // About This App
+  aboutThisApp: string;
+  developerName: string;
+  developerStatus: string;
+  developerEmail: string;
+  developedBy: string;
+  developerStatusLabel: string;
+  developerEmailLabel: string;
+  appVersion: string;
+  versionNumber: string;
+
+  // Print Client Details
+  printDetails: string;
+  printDocument: string;
+  clientDetailsDocument: string;
+  clientInformation: string;
+  applicationAndPayment: string;
+  electronicDocumentNotice: string;
 }
 
 export const translations: Record<Language, Translations> = {
@@ -399,6 +418,25 @@ export const translations: Record<Language, Translations> = {
     finishSetupAndEnter: 'Finish Setup & Enter Dashboard',
     creatingPassword: 'Securing password...',
     setupCompletedNotice: 'Setup completed! Welcome to your Dashboard.',
+
+    // About This App
+    aboutThisApp: 'About This App',
+    developerName: 'Mahmudul Hasan Manik',
+    developerStatus: 'Student at King Abdulaziz University, KSA',
+    developerEmail: 'mmanik@stu.kau.edu.sa',
+    developedBy: 'Developed By',
+    developerStatusLabel: 'Academic Status',
+    developerEmailLabel: 'Contact Email',
+    appVersion: 'Application Version',
+    versionNumber: 'Version',
+
+    // Print Client Details
+    printDetails: 'Print Details',
+    printDocument: 'Print Document',
+    clientDetailsDocument: 'Client Details Document',
+    clientInformation: 'Client Information',
+    applicationAndPayment: 'Application & Payment Information',
+    electronicDocumentNotice: 'This document is electronically generated and does not require a signature or stamp.',
   },
   bn: {
     dashboard: 'ড্যাশবোর্ড',
@@ -592,6 +630,25 @@ export const translations: Record<Language, Translations> = {
     finishSetupAndEnter: 'সেটআপ সম্পন্ন করুন ও ড্যাশবোর্ডে প্রবেশ করুন',
     creatingPassword: 'পাসওয়ার্ড সুরক্ষিত করা হচ্ছে...',
     setupCompletedNotice: 'সেটআপ সফলভাবে সম্পন্ন হয়েছে! ড্যাশবোর্ডে স্বাগতম।',
+
+    // About This App
+    aboutThisApp: 'অ্যাপ সম্পর্কিত',
+    developerName: 'Mahmudul Hasan Manik',
+    developerStatus: 'Student at King Abdulaziz University, KSA',
+    developerEmail: 'mmanik@stu.kau.edu.sa',
+    developedBy: 'নির্মাতা',
+    developerStatusLabel: 'শিক্ষাগত স্ট্যাটাস',
+    developerEmailLabel: 'যোগাযোগ ইমেইল',
+    appVersion: 'অ্যাপ ভার্সন',
+    versionNumber: 'ভার্সন',
+
+    // Print Client Details
+    printDetails: 'প্রিন্ট ডিটেইলস',
+    printDocument: 'ডকুমেন্ট প্রিন্ট করুন',
+    clientDetailsDocument: 'ক্লায়েন্ট বিবরণ ডকুমেন্ট',
+    clientInformation: 'ক্লায়েন্ট তথ্য',
+    applicationAndPayment: 'আবেদন ও পেমেন্ট বিবরণী',
+    electronicDocumentNotice: 'এই ডকুমেন্টটি ইলেকট্রনিকভাবে তৈরি করা হয়েছে এবং এতে কোনো স্বাক্ষর বা সিলের প্রয়োজন নেই।',
   },
 };
 

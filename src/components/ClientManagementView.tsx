@@ -10,6 +10,7 @@ import {
   Trash2,
   X, 
   Users, 
+  Printer,
 } from 'lucide-react';
 
 interface ClientManagementViewProps {
@@ -20,6 +21,7 @@ interface ClientManagementViewProps {
   onEditClient: (client: Client) => void;
   onViewClient: (client: Client) => void;
   onDeleteClient: (client: Client) => void;
+  onPrintClient?: (client: Client) => void;
   isSyncing: boolean;
   lang: Language;
 }
@@ -32,6 +34,7 @@ export const ClientManagementView: React.FC<ClientManagementViewProps> = ({
   onEditClient,
   onViewClient,
   onDeleteClient,
+  onPrintClient,
   lang,
 }) => {
   const t = translations[lang];
@@ -368,6 +371,16 @@ export const ClientManagementView: React.FC<ClientManagementViewProps> = ({
                     {/* Actions: View, Edit, and Delete */}
                     <td className="px-4 py-3.5 text-center whitespace-nowrap">
                       <div className="flex items-center justify-center space-x-1.5">
+                        {onPrintClient && (
+                          <button
+                            id={`btn-print-${client.id}`}
+                            onClick={() => onPrintClient(client)}
+                            title={t.printDetails}
+                            className="p-1.5 text-slate-500 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors"
+                          >
+                            <Printer className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           id={`btn-view-${client.id}`}
                           onClick={() => onViewClient(client)}

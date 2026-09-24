@@ -49,6 +49,29 @@ export function resetLocalSetupState(): void {
   }
 }
 
+/**
+ * Normalizes a Google Apps Script Web App URL.
+ * Automatically fixes:
+ * 1. Accidental test endpoint '/dev' replaced with public production endpoint '/exec'
+ * 2. Trailing slashes, spaces, or query parameters
+ */
+export function normalizeWebAppUrl(rawUrl: string): string {
+  if (!rawUrl) return '';
+  let url = rawUrl.trim();
+  // Strip out any trailing query string if user pasted URL with parameters
+  const queryIndex = url.indexOf('?');
+  if (queryIndex !== -1) {
+    url = url.substring(0, queryIndex);
+  }
+  // Remove trailing slashes
+  url = url.replace(/\/+$/, '');
+  // If the user pasted an internal /dev test URL, convert it to production /exec
+  if (url.endsWith('/dev')) {
+    url = url.slice(0, -4) + '/exec';
+  }
+  return url;
+}
+
 export const DEFAULT_BRANDING: AppBranding = {
   title: 'Client Management & Application Tracking System',
   slogan: 'Google Sheets Database',
@@ -164,7 +187,11 @@ export function loadSheetsConfig(): GoogleSheetsConfig {
   try {
     const raw = localStorage.getItem(STORAGE_KEY_CONFIG);
     if (raw) {
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.webAppUrl) {
+        parsed.webAppUrl = normalizeWebAppUrl(parsed.webAppUrl);
+      }
+      return parsed;
     }
   } catch (e) {
     console.error('Error reading sheets config:', e);
@@ -181,7 +208,11 @@ export function loadSheetsConfig(): GoogleSheetsConfig {
  */
 export function saveSheetsConfig(config: GoogleSheetsConfig): void {
   try {
-    localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(config));
+    const sanitizedConfig = {
+      ...config,
+      webAppUrl: normalizeWebAppUrl(config.webAppUrl),
+    };
+    localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify(sanitizedConfig));
   } catch (e) {
     console.error('Error saving sheets config:', e);
   }
@@ -312,7 +343,7 @@ export async function testGoogleSheetsConnection(webAppUrl: string): Promise<{
   }
 
   try {
-    const cleanUrl = webAppUrl.trim();
+    const cleanUrl = normalizeWebAppUrl(webAppUrl);
     const testUrl = new URL(cleanUrl);
     testUrl.searchParams.set('action', 'test');
 
@@ -414,7 +445,7 @@ export async function fetchFromGoogleSheets(webAppUrl: string): Promise<{
   error?: string;
 }> {
   try {
-    const cleanUrl = webAppUrl.trim();
+    const cleanUrl = normalizeWebAppUrl(webAppUrl);
     const fetchUrl = new URL(cleanUrl);
     fetchUrl.searchParams.set('action', 'getAll');
 
@@ -523,7 +554,7 @@ export async function sendMutationToGoogleSheets(
   details?: any;
 }> {
   try {
-    const cleanUrl = webAppUrl.trim();
+    const cleanUrl = normalizeWebAppUrl(webAppUrl);
     const bodyData = {
       action,
       ...payload,
@@ -704,7 +735,7 @@ export async function checkPasswordConfigured(
   }
 
   try {
-    const cleanUrl = webAppUrl.trim();
+    const cleanUrl = normalizeWebAppUrl(webAppUrl);
     const testUrl = new URL(cleanUrl);
     testUrl.searchParams.set('action', 'checkPasswordStatus');
 
