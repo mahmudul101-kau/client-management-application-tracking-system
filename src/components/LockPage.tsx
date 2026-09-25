@@ -351,7 +351,7 @@ export const LockPage: React.FC<LockPageProps> = ({
           <h1 id="lock-app-title" className="text-2xl sm:text-3xl font-extrabold tracking-tight text-slate-900 dark:text-white max-w-md">
             {branding.title || 'Client Management'}
           </h1>
-          {branding.slogan && (
+          {branding.slogan && branding.slogan !== 'Google Sheets Database' && (
             <p id="lock-app-slogan" className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1.5 max-w-sm font-medium">
               {branding.slogan}
             </p>

@@ -618,6 +618,8 @@ export async function sendMutationToGoogleSheets(
     | 'verifyPassword'
     | 'setPassword'
     | 'checkPasswordStatus'
+    | 'getPublicBranding'
+    | 'getBranding'
     | 'initializeDatabase'
     | 'verifyDatabase',
   payload: any
@@ -629,6 +631,7 @@ export async function sendMutationToGoogleSheets(
   applicationStatuses?: any[];
   deleted?: boolean;
   settings?: any;
+  branding?: any;
   verified?: boolean;
   hasPasswordConfigured?: boolean;
   details?: any;
@@ -666,6 +669,7 @@ export async function sendMutationToGoogleSheets(
       applicationStatuses: data.applicationStatuses,
       deleted: data.deleted,
       settings: data.settings,
+      branding: data.branding,
       verified: data.verified,
       hasPasswordConfigured: data.hasPasswordConfigured,
       details: data.details,
@@ -1056,18 +1060,29 @@ export async function setDashboardPassword(
   };
 }
 
+export interface PasswordStatusResult {
+  success: boolean;
+  hasPasswordConfigured?: boolean;
+  branding?: {
+    app_title?: string;
+    app_slogan?: string;
+    logo_url?: string;
+    title?: string;
+    slogan?: string;
+    logoUrl?: string;
+  };
+  error?: string;
+}
+
 /**
  * Checks if a password has been configured in the remote Google Sheets database.
  * Used at startup to determine whether the app is already in production.
  * NEVER logs passwords, password hashes, salts, or client records.
+ * Retrieves only hasPasswordConfigured and public branding (app_title, app_slogan, logo_url).
  */
 export async function checkPasswordConfigured(
   webAppUrl: string
-): Promise<{
-  success: boolean;
-  hasPasswordConfigured?: boolean;
-  error?: string;
-}> {
+): Promise<PasswordStatusResult> {
   const cleanUrl = normalizeWebAppUrl(webAppUrl);
   if (!cleanUrl || !cleanUrl.startsWith('http')) {
     return {
@@ -1099,6 +1114,7 @@ export async function checkPasswordConfigured(
       return {
         success: true,
         hasPasswordConfigured: Boolean(postRes.hasPasswordConfigured),
+        branding: postRes.branding || postRes.settings,
       };
     }
 
@@ -1118,6 +1134,7 @@ export async function checkPasswordConfigured(
         return {
           success: true,
           hasPasswordConfigured: Boolean(pingRes.hasPasswordConfigured),
+          branding: pingRes.branding,
         };
       }
 
@@ -1134,6 +1151,7 @@ export async function checkPasswordConfigured(
         return {
           success: true,
           hasPasswordConfigured: Boolean(verifyRes.hasPasswordConfigured),
+          branding: verifyRes.branding,
         };
       }
     }
@@ -1176,6 +1194,7 @@ export async function checkPasswordConfigured(
         return {
           success: true,
           hasPasswordConfigured: Boolean(data.hasPasswordConfigured),
+          branding: data.branding || data.settings,
         };
       }
     }
@@ -1188,6 +1207,41 @@ export async function checkPasswordConfigured(
     hasPasswordConfigured: false,
     error: 'Could not verify password configuration with Google Apps Script backend.',
   };
+}
+
+/**
+ * Fetches public branding fields (app_title, app_slogan, logo_url) from remote Settings sheet.
+ * Strictly read-only, never returns password hashes, salts, or client records.
+ */
+export async function fetchPublicBranding(
+  webAppUrl: string
+): Promise<{
+  success: boolean;
+  branding?: {
+    app_title?: string;
+    app_slogan?: string;
+    logo_url?: string;
+    title?: string;
+    slogan?: string;
+    logoUrl?: string;
+  };
+  error?: string;
+}> {
+  const cleanUrl = normalizeWebAppUrl(webAppUrl);
+  if (!cleanUrl || !cleanUrl.startsWith('http')) {
+    return { success: false, error: 'Invalid URL' };
+  }
+
+  try {
+    const res = await sendMutationToGoogleSheets(cleanUrl, 'getPublicBranding', {});
+    if (res.success && res.branding) {
+      return { success: true, branding: res.branding };
+    }
+  } catch (e: any) {
+    console.warn('[STARTUP_AUTH] fetchPublicBranding error:', e);
+  }
+
+  return { success: false, error: 'Could not fetch public branding' };
 }
 
 export interface DatabaseInitResult {

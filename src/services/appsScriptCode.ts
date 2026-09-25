@@ -68,18 +68,37 @@ function handleRequest(e) {
       response.categoriesCount = Math.max(0, getCategoriesSheet(ss).getLastRow() - 1);
       response.statusesCount = Math.max(0, getStatusesSheet(ss).getLastRow() - 1);
 
-      // Check if dashboard password is configured
+      // Check if dashboard password is configured & load public branding
       var sSheet = ss.getSheetByName('Settings');
       var testHasPass = false;
+      var pingTitle = '';
+      var pingSlogan = '';
+      var pingLogo = '';
       if (sSheet && sSheet.getLastRow() > 1) {
         var sVals = sSheet.getRange(2, 1, sSheet.getLastRow() - 1, 2).getValues();
         for (var st = 0; st < sVals.length; st++) {
-          if (String(sVals[st][0] || '').trim() === 'dashboard_password_hash') {
-            testHasPass = String(sVals[st][1] || '').trim().length > 0;
+          var sk = String(sVals[st][0] || '').trim();
+          var sv = String(sVals[st][1] !== undefined && sVals[st][1] !== null ? sVals[st][1] : '');
+          if (sk === 'dashboard_password_hash') {
+            testHasPass = sv.trim().length > 0;
+          } else if (sk === 'app_title' || sk === 'title') {
+            pingTitle = sv;
+          } else if (sk === 'app_slogan' || sk === 'slogan') {
+            pingSlogan = sv;
+          } else if (sk === 'logo_url' || sk === 'logoUrl' || sk === 'logo') {
+            pingLogo = sv;
           }
         }
       }
       response.hasPasswordConfigured = testHasPass;
+      response.branding = {
+        app_title: pingTitle,
+        title: pingTitle,
+        app_slogan: pingSlogan,
+        slogan: pingSlogan,
+        logo_url: pingLogo,
+        logoUrl: pingLogo
+      };
     } else if (actionLower === 'getall' || actionLower === 'readall') {
       response.clients = readClients(ss);
       response.categories = readCategories(ss);
@@ -331,15 +350,69 @@ function handleRequest(e) {
       var sheet = getSettingsSheet(ss);
       var lastRow = sheet.getLastRow();
       var storedHash = '';
+      var appTitle = '';
+      var appSlogan = '';
+      var logoUrl = '';
       if (lastRow > 1) {
         var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
         for (var sv = 0; sv < sVals.length; sv++) {
           var sk = String(sVals[sv][0] || '').trim();
-          if (sk === 'dashboard_password_hash') storedHash = String(sVals[sv][1] || '').trim();
+          var sVal = String(sVals[sv][1] !== undefined && sVals[sv][1] !== null ? sVals[sv][1] : '');
+          if (sk === 'dashboard_password_hash') {
+            storedHash = sVal.trim();
+          } else if (sk === 'app_title' || sk === 'title') {
+            appTitle = sVal;
+          } else if (sk === 'app_slogan' || sk === 'slogan') {
+            appSlogan = sVal;
+          } else if (sk === 'logo_url' || sk === 'logoUrl' || sk === 'logo') {
+            logoUrl = sVal;
+          }
         }
       }
       response.success = true;
       response.hasPasswordConfigured = Boolean(storedHash && storedHash.length > 0);
+      response.branding = {
+        app_title: appTitle,
+        title: appTitle,
+        app_slogan: appSlogan,
+        slogan: appSlogan,
+        logo_url: logoUrl,
+        logoUrl: logoUrl
+      };
+    } else if (
+      action === 'getPublicBranding' || 
+      actionLower === 'getpublicbranding' || 
+      action === 'getBranding' || 
+      actionLower === 'getbranding'
+    ) {
+      var sheet = getSettingsSheet(ss);
+      var lastRow = sheet.getLastRow();
+      var appTitle = '';
+      var appSlogan = '';
+      var logoUrl = '';
+      if (lastRow > 1) {
+        var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+        for (var sv = 0; sv < sVals.length; sv++) {
+          var sk = String(sVals[sv][0] || '').trim();
+          var sVal = String(sVals[sv][1] !== undefined && sVals[sv][1] !== null ? sVals[sv][1] : '');
+          if (sk === 'app_title' || sk === 'title') {
+            appTitle = sVal;
+          } else if (sk === 'app_slogan' || sk === 'slogan') {
+            appSlogan = sVal;
+          } else if (sk === 'logo_url' || sk === 'logoUrl' || sk === 'logo') {
+            logoUrl = sVal;
+          }
+        }
+      }
+      response.success = true;
+      response.branding = {
+        app_title: appTitle,
+        title: appTitle,
+        app_slogan: appSlogan,
+        slogan: appSlogan,
+        logo_url: logoUrl,
+        logoUrl: logoUrl
+      };
     } else if (action === 'initializeDatabase' || actionLower === 'initializedatabase' || actionLower === 'initdatabase') {
       var initResult = runDatabaseInitialization(ss);
       response.success = initResult.success;

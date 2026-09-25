@@ -31,6 +31,7 @@ import {
   verifyDashboardPassword,
   setDashboardPassword,
   checkPasswordConfigured,
+  fetchPublicBranding,
   isFirstTimeSetupCompleted,
   markFirstTimeSetupCompleted,
   resolveWebAppUrl
@@ -64,7 +65,8 @@ import {
   RotateCw, 
   Database, 
   Sun, 
-  Moon 
+  Moon,
+  FileSpreadsheet
 } from 'lucide-react';
 
 export type StartupRoute = 'CHECKING_BACKEND' | 'LOCK_PAGE' | 'FIRST_TIME_SETUP' | 'BACKEND_ERROR';
@@ -253,10 +255,43 @@ export default function App() {
     }
 
     try {
-      // 2. Call the remote Apps Script backend to check whether a dashboard password exists (ONE request)
+      // 2. Call the remote Apps Script backend to check whether a dashboard password exists & fetch public branding (ONE request)
       const chk = await checkPasswordConfigured(resolvedUrl);
 
       if (!isMountedRef.current) return;
+
+      // Extract and apply remote public branding (app_title, app_slogan, logo_url) from Google Sheets Settings
+      let loadedBranding = chk.branding;
+
+      // Fallback: If checkPasswordStatus didn't include branding (e.g. older deployment), fetch public branding once
+      if (!loadedBranding) {
+        try {
+          const brandRes = await fetchPublicBranding(resolvedUrl);
+          if (brandRes.success && brandRes.branding) {
+            loadedBranding = brandRes.branding;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (loadedBranding && isMountedRef.current) {
+        const brandTitle = loadedBranding.app_title || loadedBranding.title;
+        const brandSlogan = loadedBranding.app_slogan !== undefined ? loadedBranding.app_slogan : loadedBranding.slogan;
+        const brandLogo = loadedBranding.logo_url || loadedBranding.logoUrl;
+
+        setBranding((prev) => {
+          const updated: AppBranding = {
+            title: brandTitle || prev.title || DEFAULT_BRANDING.title,
+            slogan: brandSlogan !== undefined ? brandSlogan : (prev.slogan !== 'Google Sheets Database' ? prev.slogan : ''),
+            logoUrl: brandLogo !== undefined ? brandLogo : (prev.logoUrl || ''),
+            currency: prev.currency || 'USD',
+            customCurrencySymbol: prev.customCurrencySymbol || '',
+          };
+          saveStoredBranding(updated);
+          return updated;
+        });
+      }
 
       if (chk.success && chk.hasPasswordConfigured === true) {
         // REQUIREMENT 5:
@@ -1315,22 +1350,56 @@ export default function App() {
   };
 
   // 0. CHECKING_BACKEND: Temporary loading screen while verifying backend connection
-  // "3. Show a temporary "Checking secure connection..." loading screen."
-  // Does NOT render FirstTimeSetup before asynchronous check completes!
+  // Displays company logo from logo_url, app_title, and app_slogan with secure connection indicator
   if (startupRoute === 'CHECKING_BACKEND') {
+    const logoUrl = branding.logoUrl || '';
+    const hasCustomLogo = Boolean(logoUrl.trim().length > 0);
+    const isImageLogo = Boolean(hasCustomLogo && (
+      logoUrl.startsWith('data:') ||
+      logoUrl.startsWith('http://') ||
+      logoUrl.startsWith('https://') ||
+      logoUrl.startsWith('/') ||
+      logoUrl.startsWith('blob:')
+    ));
+
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4 transition-colors selection:bg-emerald-500 selection:text-white">
-        <div className="flex flex-col items-center space-y-4 max-w-sm text-center">
-          <div className="w-14 h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-600/25 animate-pulse">
-            <Loader2 className="w-7 h-7 animate-spin" />
-          </div>
+        <div className="flex flex-col items-center space-y-4 max-w-sm text-center animate-in fade-in zoom-in-95 duration-200">
+          {/* Company Logo Container */}
+          {isImageLogo ? (
+            <div className="relative group mb-1">
+              <div className="absolute -inset-1 rounded-2xl bg-gradient-to-r from-emerald-500/20 to-teal-500/20 blur-sm animate-pulse" />
+              <img
+                src={logoUrl}
+                alt={branding.title || 'Application Logo'}
+                referrerPolicy="no-referrer"
+                className="relative w-16 h-16 sm:w-20 sm:h-20 rounded-2xl object-contain bg-white dark:bg-slate-900 border border-slate-200/90 dark:border-slate-800 shadow-md p-2"
+              />
+            </div>
+          ) : hasCustomLogo ? (
+            <div className="h-14 sm:h-16 px-5 rounded-2xl bg-white dark:bg-slate-900 text-emerald-600 dark:text-emerald-400 flex items-center justify-center font-bold text-sm sm:text-base tracking-wide shadow-md border border-slate-200/90 dark:border-slate-800 mb-1">
+              {logoUrl}
+            </div>
+          ) : (
+            <div className="w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-gradient-to-tr from-slate-900 to-slate-800 dark:from-slate-800 dark:to-slate-900 text-emerald-400 flex items-center justify-center shadow-lg border border-slate-200/80 dark:border-slate-700/80 mb-1">
+              <FileSpreadsheet className="w-7 h-7 sm:w-8 sm:h-8 text-emerald-400" />
+            </div>
+          )}
+
           <div>
-            <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
-              {branding.title || 'Client Management & Application Tracking'}
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium">
-              {lang === 'bn' ? 'ডাটাবেজের সাথে সংযোগ পরীক্ষা করা হচ্ছে...' : 'Checking secure connection...'}
-            </p>
+            <h2 className="text-xl sm:text-2xl font-extrabold tracking-tight text-slate-900 dark:text-white">
+              {branding.title || 'Client Management'}
+            </h2>
+            {branding.slogan && branding.slogan !== 'Google Sheets Database' && (
+              <p className="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-1 font-medium max-w-xs mx-auto">
+                {branding.slogan}
+              </p>
+            )}
+          </div>
+
+          <div className="flex items-center space-x-2 text-xs text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-3.5 py-1.5 rounded-full border border-emerald-200/70 dark:border-emerald-800/60 font-medium shadow-2xs">
+            <Loader2 className="w-3.5 h-3.5 animate-spin shrink-0" />
+            <span>{lang === 'bn' ? 'ডাটাবেজের সাথে সংযোগ পরীক্ষা করা হচ্ছে...' : 'Checking secure connection...'}</span>
           </div>
         </div>
       </div>
