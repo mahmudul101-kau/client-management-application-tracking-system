@@ -471,37 +471,49 @@ export default function App() {
     try {
       const res = await verifyDashboardPassword(sheetsConfig.webAppUrl, enteredPassword);
       if (res.verified) {
-        if (typeof window !== 'undefined') {
-          sessionStorage.setItem('dashboard_session_active', 'true');
-        }
-        setIsLocked(false);
-        setHasPasswordConfigured(true);
+        // Fetch complete Google Sheets data BEFORE unlocking/showing the Dashboard
+        const fetchRes = await fetchFromGoogleSheets(sheetsConfig.webAppUrl);
+        if (fetchRes.success) {
+          if (fetchRes.branding) {
+            setBranding(fetchRes.branding);
+            setActiveCurrency(fetchRes.branding.currency, fetchRes.branding.customCurrencySymbol);
+            saveStoredBranding(fetchRes.branding);
+          }
+          if (fetchRes.clients) setClients(fetchRes.clients);
+          if (fetchRes.categories) setCategories(fetchRes.categories);
+          if (fetchRes.applicationStatuses && fetchRes.applicationStatuses.length > 0) {
+            setApplicationStatuses(fetchRes.applicationStatuses);
+          }
+          saveLocalData({
+            clients: fetchRes.clients || [],
+            categories: fetchRes.categories || [],
+            applicationStatuses: fetchRes.applicationStatuses || applicationStatuses,
+            branding: fetchRes.branding || branding,
+            updatedAt: new Date().toISOString(),
+          });
+          const updatedConfig: GoogleSheetsConfig = {
+            ...sheetsConfig,
+            sheetName: fetchRes.sheetName || sheetsConfig.sheetName,
+            lastSyncedAt: new Date().toISOString(),
+            status: 'connected',
+          };
+          setSheetsConfig(updatedConfig);
+          saveSheetsConfig(updatedConfig);
 
-        // Refresh live data from Google Sheets in background upon successful unlock
-        if (sheetsConfig.webAppUrl) {
-          fetchFromGoogleSheets(sheetsConfig.webAppUrl).then((fetchRes) => {
-            if (fetchRes.success) {
-              if (fetchRes.branding) {
-                setBranding(fetchRes.branding);
-                setActiveCurrency(fetchRes.branding.currency, fetchRes.branding.customCurrencySymbol);
-                saveStoredBranding(fetchRes.branding);
-              }
-              if (fetchRes.clients) setClients(fetchRes.clients);
-              if (fetchRes.categories) setCategories(fetchRes.categories);
-              if (fetchRes.applicationStatuses && fetchRes.applicationStatuses.length > 0) {
-                setApplicationStatuses(fetchRes.applicationStatuses);
-              }
-              saveLocalData({
-                clients: fetchRes.clients || clients,
-                categories: fetchRes.categories || categories,
-                applicationStatuses: fetchRes.applicationStatuses || applicationStatuses,
-                branding: fetchRes.branding || branding,
-                updatedAt: new Date().toISOString(),
-              });
-            }
-          }).catch(() => {});
+          if (typeof window !== 'undefined') {
+            sessionStorage.setItem('dashboard_session_active', 'true');
+          }
+          setIsLocked(false);
+          setHasPasswordConfigured(true);
+          return { success: true };
+        } else {
+          return {
+            success: false,
+            error: fetchRes.error
+              ? (lang === 'bn' ? `ডাটাবেজ থেকে তথ্য লোড ব্যর্থ হয়েছে: ${fetchRes.error}` : `Failed to load database records: ${fetchRes.error}`)
+              : (lang === 'bn' ? 'ডাটাবেজ থেকে তথ্য লোড ব্যর্থ হয়েছে।' : 'Failed to load database records from Google Sheets.'),
+          };
         }
-        return { success: true };
       } else {
         return {
           success: false,

@@ -329,6 +329,7 @@ export function saveStoredBranding(branding: AppBranding): void {
  * Loads stored local data (with backwards compatibility & data migration)
  */
 export function getLocalData(): StoredData {
+  const hasConfiguredUrl = Boolean(resolveWebAppUrl());
   try {
     // Check v2 key first
     let raw = localStorage.getItem(STORAGE_KEY_DATA);
@@ -363,13 +364,15 @@ export function getLocalData(): StoredData {
         const branding: AppBranding = parsed.branding || loadStoredBranding();
 
         const fullData: StoredData = {
-          clients: parsed.clients,
-          categories: parsed.categories,
+          clients: (hasConfiguredUrl && isSeedClients(parsed.clients)) ? [] : parsed.clients,
+          categories: (hasConfiguredUrl && isSeedCategories(parsed.categories)) ? [] : parsed.categories,
           applicationStatuses: statuses,
           branding,
           updatedAt: parsed.updatedAt || new Date().toISOString(),
         };
-        saveLocalData(fullData);
+        if (!hasConfiguredUrl || !isSeedClients(parsed.clients)) {
+          saveLocalData(fullData);
+        }
         return fullData;
       }
     }
@@ -377,16 +380,30 @@ export function getLocalData(): StoredData {
     console.error('Error reading local data:', e);
   }
 
-  // Initial seed data
+  // When a valid Google Apps Script Web App URL is configured (via env, url param, or saved config),
+  // do NOT seed INITIAL_CLIENTS or INITIAL_CATEGORIES into localStorage as production startup data.
+  // Use empty arrays until real Google Sheets data is loaded.
   const initialData: StoredData = {
-    clients: INITIAL_CLIENTS,
-    categories: INITIAL_CATEGORIES,
+    clients: hasConfiguredUrl ? [] : INITIAL_CLIENTS,
+    categories: hasConfiguredUrl ? [] : INITIAL_CATEGORIES,
     applicationStatuses: INITIAL_APPLICATION_STATUSES,
     branding: DEFAULT_BRANDING,
     updatedAt: new Date().toISOString(),
   };
-  saveLocalData(initialData);
+  if (!hasConfiguredUrl) {
+    saveLocalData(initialData);
+  }
   return initialData;
+}
+
+function isSeedClients(clientsList: any[]): boolean {
+  if (!Array.isArray(clientsList) || clientsList.length !== 3) return false;
+  return clientsList[0]?.id === 'C-0001' && clientsList[1]?.id === 'C-0002' && clientsList[2]?.id === 'C-0003';
+}
+
+function isSeedCategories(catList: any[]): boolean {
+  if (!Array.isArray(catList) || catList.length !== 3) return false;
+  return catList[0]?.id === 'CAT-001' && catList[1]?.id === 'CAT-002' && catList[2]?.id === 'CAT-003';
 }
 
 /**
@@ -507,7 +524,9 @@ export function parseBrandingFromSettings(
 }
 
 /**
- * Fetches all clients, categories, application statuses, and settings from Google Sheets
+ * Fetches all clients, categories, application statuses, and settings from Google Sheets.
+ * Uses POST with text/plain to avoid CORS preflight failures and eliminate HTTP 404
+ * from Google's GET 302 echo redirect proxy (script.googleusercontent.com).
  */
 export async function fetchFromGoogleSheets(webAppUrl: string): Promise<{
   success: boolean;
@@ -522,14 +541,17 @@ export async function fetchFromGoogleSheets(webAppUrl: string): Promise<{
 }> {
   try {
     const cleanUrl = normalizeWebAppUrl(webAppUrl);
-    const fetchUrl = new URL(cleanUrl);
-    fetchUrl.searchParams.set('action', 'getAll');
+    if (!cleanUrl || !cleanUrl.startsWith('http')) {
+      return { success: false, error: 'Invalid Google Sheets Web App URL' };
+    }
 
-    const res = await fetch(fetchUrl.toString(), {
-      method: 'GET',
+    // Use POST with text/plain (same reliable path as all other mutations)
+    const res = await fetch(cleanUrl, {
+      method: 'POST',
       headers: {
-        'Accept': 'application/json',
+        'Content-Type': 'text/plain;charset=utf-8',
       },
+      body: JSON.stringify({ action: 'getAll' }),
     });
 
     if (!res.ok) {
@@ -615,6 +637,7 @@ export async function sendMutationToGoogleSheets(
     | 'deleteStatus'
     | 'saveSettings'
     | 'saveAll'
+    | 'getAll'
     | 'verifyPassword'
     | 'setPassword'
     | 'checkPasswordStatus'
@@ -628,6 +651,9 @@ export async function sendMutationToGoogleSheets(
   error?: string;
   message?: string;
   status?: any;
+  clients?: any[];
+  categories?: any[];
+  sheetName?: string;
   applicationStatuses?: any[];
   deleted?: boolean;
   settings?: any;
@@ -667,6 +693,9 @@ export async function sendMutationToGoogleSheets(
       message: data.message,
       status: data.status,
       applicationStatuses: data.applicationStatuses,
+      clients: data.clients,
+      categories: data.categories,
+      sheetName: data.sheetName,
       deleted: data.deleted,
       settings: data.settings,
       branding: data.branding,
