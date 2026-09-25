@@ -1490,32 +1490,13 @@ export default function App() {
         <LockPage
           branding={branding}
           hasPasswordConfigured={hasPasswordConfigured}
-          isWebappConfigured={Boolean(sheetsConfig.webAppUrl && sheetsConfig.webAppUrl.trim().startsWith('http'))}
           webAppUrl={sheetsConfig.webAppUrl}
           onUnlock={handleUnlock}
           onSetInitialPassword={handleSetInitialPassword}
-          onOpenSheetsModal={() => setIsSheetsModalOpen(true)}
           lang={lang}
           onLanguageChange={handleLanguageChange}
           theme={theme}
           onToggleTheme={toggleTheme}
-        />
-
-        {/* Google Sheets Config & Sync Modal accessible from lock screen */}
-        <GoogleSheetsModal
-          isOpen={isSheetsModalOpen}
-          onClose={() => setIsSheetsModalOpen(false)}
-          config={sheetsConfig}
-          onSaveConfig={async (newUrl) => {
-            const saved = await handleSaveSheetsConfig(newUrl);
-            if (saved) {
-              checkStartupBackend(true);
-            }
-            return saved;
-          }}
-          onSyncAllToSheet={handleSyncAllToSheet}
-          onPullFromSheet={handlePullFromSheet}
-          isSyncing={isSyncing}
         />
 
         {/* Toast Notification */}

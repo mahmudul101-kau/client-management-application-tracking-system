@@ -12,9 +12,7 @@ import {
   Sun, 
   Moon, 
   FileSpreadsheet,
-  Link2,
-  Sparkles,
-  Database
+  Sparkles
 } from 'lucide-react';
 import { AppBranding, Language, ThemeMode } from '../types';
 import { translations } from '../services/translations';
@@ -27,7 +25,6 @@ import {
 interface LockPageProps {
   branding: AppBranding;
   hasPasswordConfigured: boolean;
-  isWebappConfigured: boolean;
   webAppUrl?: string;
   onUnlock: (password: string) => Promise<{
     success: boolean;
@@ -37,7 +34,6 @@ interface LockPageProps {
     remainingAttempts?: number;
   }>;
   onSetInitialPassword: (newPassword: string) => Promise<{ success: boolean; error?: string }>;
-  onOpenSheetsModal: () => void;
   lang: Language;
   onLanguageChange: (lang: Language) => void;
   theme: ThemeMode;
@@ -47,11 +43,9 @@ interface LockPageProps {
 export const LockPage: React.FC<LockPageProps> = ({
   branding,
   hasPasswordConfigured,
-  isWebappConfigured,
   webAppUrl = '',
   onUnlock,
   onSetInitialPassword,
-  onOpenSheetsModal,
   lang,
   onLanguageChange,
   theme,
@@ -313,18 +307,6 @@ export const LockPage: React.FC<LockPageProps> = ({
               <Moon className="w-4 h-4 text-slate-600" />
             )}
           </button>
-
-          {/* Database / Sheets Configuration Button */}
-          <button
-            id="lock-sheets-modal-btn"
-            type="button"
-            onClick={onOpenSheetsModal}
-            title={lang === 'bn' ? 'ডাটাবেজ ও গুগল শিট সেটিংস' : 'Database & Google Sheets Settings'}
-            className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md text-slate-700 dark:text-slate-300 hover:text-emerald-600 dark:hover:text-emerald-400 rounded-xl border border-slate-200/80 dark:border-slate-800/80 shadow-2xs transition-all cursor-pointer text-xs font-semibold"
-          >
-            <Database className="w-3.5 h-3.5 text-emerald-500" />
-            <span className="hidden sm:inline">{lang === 'bn' ? 'ডাটাবেজ' : 'Database'}</span>
-          </button>
         </div>
       </header>
 
@@ -446,18 +428,6 @@ export const LockPage: React.FC<LockPageProps> = ({
                     )}
                   </div>
                 </div>
-                {(errorMessage.includes('404') || errorMessage.toLowerCase().includes('google apps script') || errorMessage.toLowerCase().includes('not configured')) && (
-                  <div className="pt-1.5 pl-6 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={onOpenSheetsModal}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 active:scale-95 text-white font-semibold text-xs shadow-2xs transition-all cursor-pointer"
-                    >
-                      <Database className="w-3.5 h-3.5" />
-                      <span>{lang === 'bn' ? 'গুগল শিট ইউআরএল ঠিক করুন' : 'Fix Google Sheets Web App URL'}</span>
-                    </button>
-                  </div>
-                )}
               </div>
             )}
 
@@ -470,33 +440,6 @@ export const LockPage: React.FC<LockPageProps> = ({
               >
                 <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-emerald-500" />
                 <span className="font-medium flex-1">{setupSuccessMessage}</span>
-              </div>
-            )}
-
-            {/* Google Sheets Connection Notice if not configured */}
-            {!isWebappConfigured && (
-              <div className="mb-5 p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200/90 dark:border-amber-900/60 text-amber-800 dark:text-amber-300 text-xs">
-                <div className="flex items-start space-x-2.5">
-                  <ShieldAlert className="w-4 h-4 shrink-0 text-amber-500 mt-0.5" />
-                  <div className="flex-1">
-                    <p className="font-semibold">
-                      {lang === 'bn' ? 'গুগল শিট সংযুক্ত করা হয়নি' : 'Google Sheets Not Connected'}
-                    </p>
-                    <p className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400 leading-relaxed">
-                      {lang === 'bn'
-                        ? 'পাসওয়ার্ড যাচাই ও ডেটা স্থায়ীভাবে সংরক্ষণ করতে গুগল শিট ওয়েব অ্যাপ ইউআরএল যুক্ত করুন।'
-                        : 'Connect your Google Sheet Web App URL to enable server-side password verification and persistent data storage.'}
-                    </p>
-                    <button
-                      type="button"
-                      onClick={onOpenSheetsModal}
-                      className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 active:scale-95 text-white font-semibold text-xs shadow-2xs transition-all cursor-pointer"
-                    >
-                      <Link2 className="w-3.5 h-3.5" />
-                      <span>{t.connectGoogleSheets}</span>
-                    </button>
-                  </div>
-                </div>
               </div>
             )}
 
