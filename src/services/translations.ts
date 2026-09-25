@@ -174,6 +174,10 @@ export interface Translations {
   noPasswordConfigured: string;
   setPassword: string;
   updatePassword: string;
+  tooManyFailedAttempts: string;
+  deviceTemporarilyLocked: string;
+  tryAgainIn: string;
+  attemptsRemaining: string;
   // Setup Wizard
   welcomeToApp: string;
   setupRequiredTitle: string;
@@ -389,6 +393,10 @@ export const translations: Record<Language, Translations> = {
     noPasswordConfigured: 'No Password Configured',
     setPassword: 'Set Password',
     updatePassword: 'Update Password',
+    tooManyFailedAttempts: 'Too many failed attempts.',
+    deviceTemporarilyLocked: 'This device is temporarily locked.',
+    tryAgainIn: 'Try again in',
+    attemptsRemaining: 'attempts remaining',
     welcomeToApp: 'Welcome to',
     setupRequiredTitle: 'Initial Setup Required',
     setupRequiredDesc: 'Before using the system, connect your Google Sheets database and set up your secure Dashboard password.',
@@ -601,6 +609,10 @@ export const translations: Record<Language, Translations> = {
     noPasswordConfigured: 'কোনো পাসওয়ার্ড কনফিগার করা নেই',
     setPassword: 'পাসওয়ার্ড সেট করুন',
     updatePassword: 'পাসওয়ার্ড আপডেট করুন',
+    tooManyFailedAttempts: 'অনেকবার ভুল পাসওয়ার্ড দেওয়া হয়েছে।',
+    deviceTemporarilyLocked: 'এই ডিভাইসটি সাময়িকভাবে লক করা হয়েছে।',
+    tryAgainIn: 'পুনরায় চেষ্টা করুন:',
+    attemptsRemaining: 'প্রচেষ্টা অবশিষ্ট আছে',
     welcomeToApp: 'স্বাগতম',
     setupRequiredTitle: 'প্রাথমিক সেটআপ আবশ্যক',
     setupRequiredDesc: 'অ্যাপ্লিকেশন ব্যবহারের পূর্বে আপনার গুগল শিট ডাটাবেজ সংযুক্ত করুন এবং একটি সুরক্ষিত ড্যাশবোর্ড পাসওয়ার্ড তৈরি করুন।',

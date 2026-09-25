@@ -37,6 +37,7 @@ interface FirstTimeSetupProps {
   branding: AppBranding;
   config: GoogleSheetsConfig;
   onSetupComplete: (webAppUrl: string) => void;
+  onExistingPasswordDetected?: (webAppUrl: string) => void;
   lang: Language;
   onLanguageChange: (lang: Language) => void;
   theme: ThemeMode;
@@ -49,6 +50,7 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
   branding,
   config,
   onSetupComplete,
+  onExistingPasswordDetected,
   lang,
   onLanguageChange,
   theme,
@@ -106,15 +108,24 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
         setConnectionStatus('success');
         setConnectedSheetName(res.sheetName || 'Google Spreadsheet');
 
-        // If backend already has a dashboard password configured, complete setup immediately
+        // If backend already has a dashboard password configured, DO NOT bypass authentication!
+        // Direct user to Lock Page to enter their existing password.
         if (res.hasPasswordConfigured) {
-          onSetupComplete(cleanUrl);
+          if (onExistingPasswordDetected) {
+            onExistingPasswordDetected(cleanUrl);
+          } else {
+            onSetupComplete(cleanUrl);
+          }
           return;
         }
 
         const passChk = await checkPasswordConfigured(cleanUrl);
         if (passChk.success && passChk.hasPasswordConfigured) {
-          onSetupComplete(cleanUrl);
+          if (onExistingPasswordDetected) {
+            onExistingPasswordDetected(cleanUrl);
+          } else {
+            onSetupComplete(cleanUrl);
+          }
           return;
         }
       } else {
@@ -146,9 +157,13 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
         return;
       }
 
-      // If backend already has a password configured, complete setup immediately
+      // If backend already has a password configured, do not bypass authentication!
       if (initRes.hasPasswordConfigured) {
-        onSetupComplete(cleanUrl);
+        if (onExistingPasswordDetected) {
+          onExistingPasswordDetected(cleanUrl);
+        } else {
+          onSetupComplete(cleanUrl);
+        }
         return;
       }
 
@@ -164,7 +179,11 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
       }
 
       if (verifyRes.hasPasswordConfigured) {
-        onSetupComplete(cleanUrl);
+        if (onExistingPasswordDetected) {
+          onExistingPasswordDetected(cleanUrl);
+        } else {
+          onSetupComplete(cleanUrl);
+        }
         return;
       }
 
@@ -218,15 +237,12 @@ export const FirstTimeSetup: React.FC<FirstTimeSetupProps> = ({
         }, 800);
       } else if (res.error && res.error.toLowerCase().includes('current password is required')) {
         // The connected database ALREADY has an established password configured!
-        // Immediately complete setup and redirect to Lock Page so the user can unlock with their existing password.
-        if (typeof window !== 'undefined') {
-          try {
-            localStorage.setItem('app_first_time_setup_completed_v1', 'true');
-          } catch (e) {
-            console.error('Error persisting setup completion:', e);
-          }
+        // Direct user to Lock Page so they must unlock with their existing password.
+        if (onExistingPasswordDetected) {
+          onExistingPasswordDetected(webAppUrl.trim());
+        } else {
+          onSetupComplete(webAppUrl.trim());
         }
-        onSetupComplete(webAppUrl.trim());
       } else {
         setPasswordError(res.error || 'Failed to configure password.');
       }

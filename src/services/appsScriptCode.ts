@@ -12,6 +12,7 @@ export const GOOGLE_APPS_SCRIPT_TEMPLATE = `/**
  * 2. Categories (4 columns)
  * 3. ApplicationStatuses (4 columns)
  * 4. Settings (2 columns: Setting Key | Setting Value)
+ * 5. DashboardSecurity (5 columns: Device ID | Failed Attempts | Locked Until | Last Failed At | Created Date)
  * 
  * CRITICAL DEPLOYMENT / UPDATE INSTRUCTIONS:
  * Whenever you update this script:
@@ -178,8 +179,55 @@ function handleRequest(e) {
     } else if (actionLower === 'savesettings' || actionLower === 'savebranding') {
       response.settings = writeSettings(ss, postData.settings || postData.branding || postData);
       response.message = 'Settings saved to Google Sheets';
-    } else if (action === 'verifyPassword' || actionLower === 'verifypassword') {
+    } else if (action === 'checkDeviceLock' || actionLower === 'checkdevicelock') {
+      var devId = String(postData.deviceId || params.deviceId || '').trim();
+      var secState = getDeviceSecurityState(ss, devId);
+      response.success = true;
+      response.deviceId = devId;
+      response.locked = secState.isLocked;
+      response.remainingSeconds = secState.remainingSeconds;
+      response.remainingAttempts = secState.remainingAttempts;
+      response.failedAttempts = secState.failedAttempts;
+    } else if (action === 'clearDeviceLoginFailures' || actionLower === 'cleardeviceloginfailures') {
+      var devIdToClear = String(postData.deviceId || params.deviceId || '').trim();
+      if (devIdToClear) {
+        recordDeviceLoginSuccess(ss, devIdToClear);
+      }
+      response.success = true;
+      response.message = 'Device login failures cleared';
+    } else if (action === 'recordFailedLogin' || actionLower === 'recordfailedlogin') {
+      var devIdToFail = String(postData.deviceId || params.deviceId || '').trim();
+      var failRes = recordDeviceLoginFailure(ss, devIdToFail);
+      response.success = true;
+      response.deviceId = devIdToFail;
+      response.locked = failRes.isLocked;
+      response.remainingSeconds = failRes.remainingSeconds;
+      response.remainingAttempts = failRes.remainingAttempts;
+      response.failedAttempts = failRes.failedAttempts;
+    } else if (
+      action === 'verifyPassword' || 
+      actionLower === 'verifypassword' ||
+      action === 'verifyDashboardPassword' ||
+      actionLower === 'verifydashboardpassword'
+    ) {
       var enteredPassword = String(postData.password || params.password || '');
+      var deviceId = String(postData.deviceId || params.deviceId || '').trim();
+
+      // Check if device is currently locked
+      if (deviceId) {
+        var devState = getDeviceSecurityState(ss, deviceId);
+        if (devState.isLocked) {
+          response.success = false;
+          response.verified = false;
+          response.locked = true;
+          response.remainingSeconds = devState.remainingSeconds;
+          response.remainingAttempts = 0;
+          response.hasPasswordConfigured = true;
+          response.error = 'Too many failed attempts. This device is temporarily locked.';
+          return ContentService.createTextOutput(JSON.stringify(response)).setMimeType(ContentService.MimeType.JSON);
+        }
+      }
+
       var sheet = getSettingsSheet(ss);
       var lastRow = sheet.getLastRow();
       var storedHash = '';
@@ -199,17 +247,35 @@ function handleRequest(e) {
         response.hasPasswordConfigured = false;
         response.message = 'No password configured yet';
       } else {
-        var computedHash = sha256Hex(storedSalt + ':' + enteredPassword);
-        if (computedHash === storedHash) {
-          response.success = true;
-          response.verified = true;
-          response.hasPasswordConfigured = true;
-          response.message = 'Password verified successfully';
-        } else {
+        if (!enteredPassword) {
+          // Probe check
           response.success = true;
           response.verified = false;
           response.hasPasswordConfigured = true;
-          response.error = 'Incorrect password';
+        } else {
+          var computedHash = sha256Hex(storedSalt + ':' + enteredPassword);
+          if (computedHash === storedHash) {
+            if (deviceId) {
+              recordDeviceLoginSuccess(ss, deviceId);
+            }
+            response.success = true;
+            response.verified = true;
+            response.locked = false;
+            response.hasPasswordConfigured = true;
+            response.remainingAttempts = 5;
+            response.message = 'Password verified successfully';
+          } else {
+            var failResult = deviceId ? recordDeviceLoginFailure(ss, deviceId) : { isLocked: false, remainingAttempts: 4, remainingSeconds: 0 };
+            response.success = false;
+            response.verified = false;
+            response.locked = failResult.isLocked;
+            response.remainingSeconds = failResult.remainingSeconds;
+            response.remainingAttempts = failResult.remainingAttempts;
+            response.hasPasswordConfigured = true;
+            response.error = failResult.isLocked 
+              ? 'Too many failed attempts. This device is temporarily locked.' 
+              : 'Incorrect password';
+          }
         }
       }
     } else if (action === 'setPassword' || actionLower === 'setpassword') {
@@ -384,11 +450,132 @@ function getSettingsSheet(ss) {
   return sheet;
 }
 
+function getSecuritySheet(ss) {
+  var sheet = ss.getSheetByName('DashboardSecurity');
+  if (!sheet) {
+    sheet = ss.insertSheet('DashboardSecurity');
+    sheet.appendRow([
+      'Device ID',
+      'Failed Attempts',
+      'Locked Until',
+      'Last Failed At',
+      'Created Date'
+    ]);
+    sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#f1f5f9');
+  }
+  return sheet;
+}
+
+function getDeviceSecurityState(ss, deviceId) {
+  if (!deviceId) {
+    return { rowIndex: -1, failedAttempts: 0, lockedUntilMs: 0, isLocked: false, remainingSeconds: 0, remainingAttempts: 5 };
+  }
+  var sheet = getSecuritySheet(ss);
+  var lastRow = sheet.getLastRow();
+  var now = new Date().getTime();
+
+  if (lastRow > 1) {
+    var vals = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
+    for (var i = 0; i < vals.length; i++) {
+      var rowDeviceId = String(vals[i][0] || '').trim();
+      if (rowDeviceId === deviceId) {
+        var failedAttempts = parseInt(vals[i][1], 10) || 0;
+        var lockedUntilStr = String(vals[i][2] || '').trim();
+        var lockedUntilMs = lockedUntilStr ? new Date(lockedUntilStr).getTime() : 0;
+        if (isNaN(lockedUntilMs)) {
+          lockedUntilMs = parseInt(lockedUntilStr, 10) || 0;
+        }
+
+        var isLocked = false;
+        var remainingSeconds = 0;
+        if (lockedUntilMs > now) {
+          isLocked = true;
+          remainingSeconds = Math.ceil((lockedUntilMs - now) / 1000);
+        } else if (lockedUntilMs > 0 && lockedUntilMs <= now) {
+          // Lockout period has expired! Reset failed attempts
+          failedAttempts = 0;
+          sheet.getRange(i + 2, 2).setValue(0);
+          sheet.getRange(i + 2, 3).setValue('');
+        }
+
+        var remainingAttempts = isLocked ? 0 : Math.max(0, 5 - failedAttempts);
+        return {
+          rowIndex: i + 2,
+          failedAttempts: failedAttempts,
+          lockedUntilMs: isLocked ? lockedUntilMs : 0,
+          isLocked: isLocked,
+          remainingSeconds: remainingSeconds,
+          remainingAttempts: remainingAttempts
+        };
+      }
+    }
+  }
+
+  return {
+    rowIndex: -1,
+    failedAttempts: 0,
+    lockedUntilMs: 0,
+    isLocked: false,
+    remainingSeconds: 0,
+    remainingAttempts: 5
+  };
+}
+
+function recordDeviceLoginSuccess(ss, deviceId) {
+  if (!deviceId) return;
+  var sheet = getSecuritySheet(ss);
+  var state = getDeviceSecurityState(ss, deviceId);
+  var nowIso = new Date().toISOString();
+  if (state.rowIndex > 1) {
+    sheet.getRange(state.rowIndex, 2).setValue(0);
+    sheet.getRange(state.rowIndex, 3).setValue('');
+  } else {
+    sheet.appendRow([deviceId, 0, '', '', nowIso]);
+  }
+}
+
+function recordDeviceLoginFailure(ss, deviceId) {
+  if (!deviceId) {
+    return { isLocked: false, remainingAttempts: 4, remainingSeconds: 0, failedAttempts: 1 };
+  }
+  var sheet = getSecuritySheet(ss);
+  var state = getDeviceSecurityState(ss, deviceId);
+  var newAttempts = state.failedAttempts + 1;
+  var now = new Date();
+  var nowIso = now.toISOString();
+  var isLocked = false;
+  var lockedUntilIso = '';
+  var remainingSeconds = 0;
+
+  if (newAttempts >= 5) {
+    isLocked = true;
+    var lockExpiry = new Date(now.getTime() + 60 * 60 * 1000); // 1-hour lockout
+    lockedUntilIso = lockExpiry.toISOString();
+    remainingSeconds = 3600;
+  }
+
+  if (state.rowIndex > 1) {
+    sheet.getRange(state.rowIndex, 2).setValue(newAttempts);
+    sheet.getRange(state.rowIndex, 3).setValue(lockedUntilIso);
+    sheet.getRange(state.rowIndex, 4).setValue(nowIso);
+  } else {
+    sheet.appendRow([deviceId, newAttempts, lockedUntilIso, nowIso, nowIso]);
+  }
+
+  return {
+    isLocked: isLocked,
+    remainingAttempts: isLocked ? 0 : Math.max(0, 5 - newAttempts),
+    remainingSeconds: remainingSeconds,
+    failedAttempts: newAttempts
+  };
+}
+
 function setupSheetsIfMissing(ss) {
   getClientsSheet(ss);
   getCategoriesSheet(ss);
   getStatusesSheet(ss);
   getSettingsSheet(ss);
+  getSecuritySheet(ss);
 }
 
 /**
@@ -481,6 +668,17 @@ function runDatabaseInitialization(ss) {
       ensureSheetHeaders(settingsSheet, settingsHeaders);
     }
     details.settings = true;
+
+    // 5. DashboardSecurity Sheet & Headers
+    var secSheet = ss.getSheetByName('DashboardSecurity');
+    var secHeaders = ['Device ID', 'Failed Attempts', 'Locked Until', 'Last Failed At', 'Created Date'];
+    if (!secSheet) {
+      secSheet = ss.insertSheet('DashboardSecurity');
+      secSheet.appendRow(secHeaders);
+      secSheet.getRange(1, 1, 1, secHeaders.length).setFontWeight('bold').setBackground('#f1f5f9');
+    } else {
+      ensureSheetHeaders(secSheet, secHeaders);
+    }
 
     // Seed default branding & configuration only if missing (never overwrite existing values or password)
     var existingSettings = {};

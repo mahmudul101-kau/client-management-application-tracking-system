@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { 
   Client, 
   Category, 
@@ -32,7 +32,8 @@ import {
   setDashboardPassword,
   checkPasswordConfigured,
   isFirstTimeSetupCompleted,
-  markFirstTimeSetupCompleted
+  markFirstTimeSetupCompleted,
+  resolveWebAppUrl
 } from './services/googleSheetsService';
 import { compressLogoDataUrl } from './services/imageUtils';
 import { translations } from './services/translations';
@@ -53,7 +54,20 @@ import { GoogleSheetsModal } from './components/GoogleSheetsModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { ClientPrintPreviewModal } from './components/ClientPrintPreviewModal';
 
-import { CheckCircle2, AlertCircle, Info, X, Loader2 } from 'lucide-react';
+import { 
+  CheckCircle2, 
+  AlertCircle, 
+  Info, 
+  X, 
+  Loader2, 
+  ShieldAlert, 
+  RotateCw, 
+  Database, 
+  Sun, 
+  Moon 
+} from 'lucide-react';
+
+export type StartupRoute = 'CHECKING_BACKEND' | 'LOCK_PAGE' | 'FIRST_TIME_SETUP' | 'BACKEND_ERROR';
 
 export default function App() {
   // Navigation tab
@@ -65,7 +79,15 @@ export default function App() {
   const [applicationStatuses, setApplicationStatuses] = useState<ApplicationStatusItem[]>(DEFAULT_APPLICATION_STATUSES);
   const [branding, setBranding] = useState<AppBranding>(DEFAULT_BRANDING);
 
-  // Sheets Config (from localStorage, URL parameters, or environment variables)
+  // Startup routing state: REMOTE BACKEND IS THE SINGLE SOURCE OF TRUTH
+  // 1. CHECKING_BACKEND: Resolves VITE_GOOGLE_SHEETS_WEB_APP_URL and checks remote password status
+  // 2. LOCK_PAGE: hasPasswordConfigured === true from backend
+  // 3. FIRST_TIME_SETUP: ONLY when hasPasswordConfigured === false from backend
+  // 4. BACKEND_ERROR: If remote check fails or no URL found, shows clear connection error screen
+  const [startupRoute, setStartupRoute] = useState<StartupRoute>('CHECKING_BACKEND');
+  const [backendError, setBackendError] = useState<string | null>(null);
+
+  // Sheets Config (from URL params, Vercel environment variables, or localStorage)
   const [sheetsConfig, setSheetsConfig] = useState<GoogleSheetsConfig>(() => {
     if (typeof window !== 'undefined') {
       return loadSheetsConfig();
@@ -77,7 +99,7 @@ export default function App() {
     };
   });
 
-  // First-time setup state (persisted in localStorage)
+  // First-time setup state (local convenience cache only; remote backend check is source of truth)
   const [isSetupComplete, setIsSetupComplete] = useState<boolean>(() => {
     if (typeof window !== 'undefined') {
       return isFirstTimeSetupCompleted();
@@ -85,32 +107,8 @@ export default function App() {
     return false;
   });
 
-  // Transient verification state for shared links/new devices to check remote password status before rendering setup
-  const [isVerifyingRemoteSetup, setIsVerifyingRemoteSetup] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const cfg = loadSheetsConfig();
-      return !isFirstTimeSetupCompleted() && Boolean(cfg.webAppUrl && cfg.webAppUrl.trim().startsWith('http'));
-    }
-    return false;
-  });
-
-  // Security & Lock State:
-  // - If setup is complete AND current browser session was already unlocked (e.g. page reload / refresh), restore dashboard unlocked.
-  // - In a fresh browser session (new tab/window after close), or when explicitly locked/inactivity, show LockPage.
-  // - sessionStorage automatically clears when the tab/browser is closed, making it ideal for session vs setup distinction.
-  const [isLocked, setIsLocked] = useState<boolean>(() => {
-    if (typeof window !== 'undefined') {
-      const setupDone = isFirstTimeSetupCompleted();
-      if (!setupDone) return true; // not setup yet -> setup wizard will be shown
-
-      const sessionUnlocked = sessionStorage.getItem('dashboard_session_active') === 'true';
-      if (sessionUnlocked) {
-        return false; // Browser reload during active dashboard session
-      }
-    }
-    return true; // Fresh application session: show Lock Page
-  });
-
+  // Security & Lock State: Starts locked by default; unlocked only after backend verification + session
+  const [isLocked, setIsLocked] = useState<boolean>(true);
   const [hasPasswordConfigured, setHasPasswordConfigured] = useState<boolean>(false);
 
   // Sync State
@@ -133,6 +131,21 @@ export default function App() {
   };
 
   const t = translations[lang];
+  const langRef = useRef(lang);
+  useEffect(() => {
+    langRef.current = lang;
+  }, [lang]);
+
+  // Guard refs to prevent duplicate/concurrent backend checks and prevent updates after unmount
+  const startupCheckStartedRef = useRef<boolean>(false);
+  const isMountedRef = useRef<boolean>(true);
+
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Modals state
   const [isClientModalOpen, setIsClientModalOpen] = useState(false);
@@ -200,9 +213,145 @@ export default function App() {
     }, 4000);
   }, []);
 
-  // 1. Initial Load from Persistent Store and Google Sheets
+  // 1. Startup Decision Logic - REMOTE BACKEND IS THE SINGLE SOURCE OF TRUTH
+  // Executes EXACTLY ONCE per app startup; guarded by startupCheckStartedRef and isMountedRef.
+  const checkStartupBackend = useCallback(async (isRetry: boolean = false) => {
+    // Prevent duplicate/concurrent checks from React StrictMode, effects, or re-renders
+    if (startupCheckStartedRef.current && !isRetry) {
+      return;
+    }
+    startupCheckStartedRef.current = true;
+
+    if (!isMountedRef.current) return;
+    setStartupRoute('CHECKING_BACKEND');
+    setBackendError(null);
+
+    // 1. Resolve VITE_GOOGLE_SHEETS_WEB_APP_URL
+    const resolvedUrl = resolveWebAppUrl();
+    console.log('[STARTUP_AUTH] 1. resolved Web App URL:', resolvedUrl || '(none)');
+
+    if (!resolvedUrl) {
+      console.warn('[STARTUP_AUTH] No Web App URL resolved from env, url params, or local storage.');
+      if (isMountedRef.current) {
+        setBackendError(
+          langRef.current === 'bn'
+            ? 'কোনো গুগল অ্যাপস স্ক্রিপ্ট ওয়েব অ্যাপ ইউআরএল পাওয়া যায়নি। অনুগ্রহ করে Vercel-এ VITE_GOOGLE_SHEETS_WEB_APP_URL কনফিগার করুন অথবা নিচের ডাটাবেজ বাটনে ক্লিক করে ইউআরএল দিন।'
+            : 'No Google Apps Script Web App URL found. Please configure VITE_GOOGLE_SHEETS_WEB_APP_URL in your Vercel deployment settings, pass ?webapp=<url> in the URL, or click "Configure Database URL" below.'
+        );
+        setStartupRoute('BACKEND_ERROR');
+      }
+      console.log('[STARTUP_AUTH] 6. final startup route: BACKEND_ERROR');
+      return;
+    }
+
+    if (isMountedRef.current) {
+      setSheetsConfig((prev) => ({
+        ...prev,
+        webAppUrl: resolvedUrl,
+        status: 'connected',
+      }));
+    }
+
+    try {
+      // 2. Call the remote Apps Script backend to check whether a dashboard password exists (ONE request)
+      const chk = await checkPasswordConfigured(resolvedUrl);
+
+      if (!isMountedRef.current) return;
+
+      if (chk.success && chk.hasPasswordConfigured === true) {
+        // REQUIREMENT 5:
+        // hasPasswordConfigured === true
+        // THEN:
+        // - NEVER render FirstTimeSetup.
+        // - Treat the application as already initialized.
+        // - Show LockPage.
+        // - Ask only for the existing password.
+        // - Verify the password remotely.
+        // - On success, open Dashboard and load existing Google Sheets data.
+        // NOTE: Does NOT modify localStorage / Google Sheets during check (Requirement 11).
+
+        setIsSetupComplete(true);
+        setHasPasswordConfigured(true);
+
+        const sessionActive = typeof window !== 'undefined' && sessionStorage.getItem('dashboard_session_active') === 'true';
+        setIsLocked(!sessionActive);
+        setStartupRoute('LOCK_PAGE');
+        console.log('[STARTUP_AUTH] 6. final startup route: LOCK_PAGE');
+
+        // If session was already active (e.g. reload during active use), pull fresh data in background
+        if (sessionActive) {
+          setIsSyncing(true);
+          fetchFromGoogleSheets(resolvedUrl)
+            .then((res) => {
+              if (!isMountedRef.current || !res.success) return;
+              if (res.branding) {
+                setBranding(res.branding);
+                setActiveCurrency(res.branding.currency, res.branding.customCurrencySymbol);
+                saveStoredBranding(res.branding);
+              }
+              if (res.clients) setClients(res.clients);
+              if (res.categories) setCategories(res.categories);
+              if (res.applicationStatuses && res.applicationStatuses.length > 0) {
+                setApplicationStatuses(res.applicationStatuses);
+              }
+              saveLocalData({
+                clients: res.clients || [],
+                categories: res.categories || [],
+                applicationStatuses: res.applicationStatuses || [],
+                branding: res.branding || DEFAULT_BRANDING,
+                updatedAt: new Date().toISOString(),
+              });
+            })
+            .catch((err) => {
+              console.warn('[STARTUP_AUTH] Initial data sync error:', err);
+            })
+            .finally(() => {
+              if (isMountedRef.current) {
+                setIsSyncing(false);
+              }
+            });
+        }
+      } else if (chk.success && chk.hasPasswordConfigured === false) {
+        // REQUIREMENT 6:
+        // hasPasswordConfigured === false
+        // THEN and ONLY THEN:
+        // - allow FirstTimeSetup.
+        setIsSetupComplete(false);
+        setHasPasswordConfigured(false);
+        setStartupRoute('FIRST_TIME_SETUP');
+        console.log('[STARTUP_AUTH] 6. final startup route: FIRST_TIME_SETUP');
+      } else {
+        // REQUIREMENT 7:
+        // If the remote check fails:
+        // - DO NOT automatically show FirstTimeSetup.
+        // - DO NOT initialize the database.
+        // - DO NOT create a password.
+        // - Show ONE stable BACKEND_ERROR screen with a Retry button.
+        setBackendError(
+          chk.error ||
+          (langRef.current === 'bn' 
+            ? 'গুগল অ্যাপস স্ক্রিপ্ট ব্যাকএন্ডের সাথে সংযোগ স্থাপন করা যায়নি।' 
+            : 'Could not connect to Google Apps Script backend. Please verify your Web App URL.')
+        );
+        setStartupRoute('BACKEND_ERROR');
+        console.log('[STARTUP_AUTH] 6. final startup route: BACKEND_ERROR');
+      }
+    } catch (err: any) {
+      if (!isMountedRef.current) return;
+      setBackendError(
+        err.message || 
+        (langRef.current === 'bn' 
+          ? 'ডাটাবেজ সংযোগ পরীক্ষায় নেটওয়ার্ক ত্রুটি দেখা দিয়েছে।' 
+          : 'Network error while checking remote database status.')
+      );
+      setStartupRoute('BACKEND_ERROR');
+      console.log('[STARTUP_AUTH] 6. final startup route: BACKEND_ERROR');
+    }
+  }, []);
+
+  // Initial Load from Persistent Store and single startup verification check
   useEffect(() => {
-    // Load local stored data
+    // 1. Load local stored data
     const local = getLocalData();
     setClients(local.clients);
     setCategories(local.categories);
@@ -214,84 +363,9 @@ export default function App() {
       setActiveCurrency(local.branding.currency, local.branding.customCurrencySymbol);
     }
 
-    // Load sheets config
-    const config = loadSheetsConfig();
-    setSheetsConfig(config);
-
-    const checkAndSyncBackend = async () => {
-      if (config.webAppUrl && config.webAppUrl.trim().startsWith('http')) {
-        try {
-          // 1. Check whether configured Google Apps Script backend has an existing dashboard password
-          const chk = await checkPasswordConfigured(config.webAppUrl);
-          if (chk.hasPasswordConfigured) {
-            // Backend confirms password is already configured!
-            // Requirement: Treat app as already initialized. Do NOT show First-Time Setup. Show Lock Page.
-            markFirstTimeSetupCompleted();
-            setIsSetupComplete(true);
-            setHasPasswordConfigured(true);
-
-            const sessionActive = sessionStorage.getItem('dashboard_session_active') === 'true';
-            setIsLocked(!sessionActive);
-          } else if (!isFirstTimeSetupCompleted()) {
-            // Truly uninitialized database with no password configured
-            setIsSetupComplete(false);
-          }
-        } catch (chkErr) {
-          console.warn('Initial password status check error:', chkErr);
-        } finally {
-          setIsVerifyingRemoteSetup(false);
-        }
-
-        // 2. Pull live data & branding - Google Sheets is the persistent source of truth
-        setIsSyncing(true);
-        try {
-          const res = await fetchFromGoogleSheets(config.webAppUrl);
-          if (res.success) {
-            if (res.hasPasswordConfigured !== undefined) {
-              setHasPasswordConfigured(Boolean(res.hasPasswordConfigured));
-            }
-            if (res.branding) {
-              setBranding(res.branding);
-              setActiveCurrency(res.branding.currency, res.branding.customCurrencySymbol);
-              saveStoredBranding(res.branding);
-            }
-            if (res.clients) {
-              setClients(res.clients);
-            }
-            if (res.categories) {
-              setCategories(res.categories);
-            }
-            if (res.applicationStatuses && res.applicationStatuses.length > 0) {
-              setApplicationStatuses(res.applicationStatuses);
-            }
-            saveLocalData({
-              clients: res.clients || local.clients,
-              categories: res.categories || local.categories,
-              applicationStatuses: res.applicationStatuses || local.applicationStatuses,
-              branding: res.branding || local.branding,
-              updatedAt: new Date().toISOString(),
-            });
-            const updatedConfig: GoogleSheetsConfig = {
-              ...config,
-              sheetName: res.sheetName || config.sheetName,
-              lastSyncedAt: new Date().toISOString(),
-              status: 'connected',
-            };
-            setSheetsConfig(updatedConfig);
-            saveSheetsConfig(updatedConfig);
-          }
-        } catch (err) {
-          console.warn('Initial sheets fetch failed, using local storage cache:', err);
-        } finally {
-          setIsSyncing(false);
-        }
-      } else {
-        setIsVerifyingRemoteSetup(false);
-      }
-    };
-
-    checkAndSyncBackend();
-  }, []);
+    // 2. Run startup verification EXACTLY ONCE on app startup
+    checkStartupBackend(false);
+  }, [checkStartupBackend]);
 
   // 2. 10-Minute Inactivity Auto-Lock
   // Runs continuously in the background only after the dashboard is unlocked.
@@ -346,7 +420,13 @@ export default function App() {
   }, [branding.currency, branding.customCurrencySymbol]);
 
   // Security & Unlock Action Handlers
-  const handleUnlock = async (enteredPassword: string): Promise<{ success: boolean; error?: string }> => {
+  const handleUnlock = async (enteredPassword: string): Promise<{
+    success: boolean;
+    error?: string;
+    locked?: boolean;
+    remainingSeconds?: number;
+    remainingAttempts?: number;
+  }> => {
     if (!sheetsConfig.webAppUrl || !sheetsConfig.webAppUrl.trim().startsWith('http')) {
       // If web app URL is not configured yet, unlock and allow user to setup sheet
       setIsLocked(false);
@@ -391,6 +471,9 @@ export default function App() {
         return {
           success: false,
           error: res.error || t.incorrectPassword,
+          locked: res.locked,
+          remainingSeconds: res.remainingSeconds,
+          remainingAttempts: res.remainingAttempts,
         };
       }
     } catch (err: any) {
@@ -400,6 +483,26 @@ export default function App() {
       };
     }
   };
+
+  const handleExistingPasswordDetected = useCallback((detectedWebAppUrl: string) => {
+    const updatedConfig: GoogleSheetsConfig = {
+      ...sheetsConfig,
+      webAppUrl: detectedWebAppUrl,
+      status: 'connected',
+      lastSyncedAt: new Date().toISOString(),
+    };
+    setSheetsConfig(updatedConfig);
+    saveSheetsConfig(updatedConfig);
+    setHasPasswordConfigured(true);
+    setIsLocked(true); // Must remain locked! Never bypass password authentication.
+    setStartupRoute('LOCK_PAGE');
+    showToast(
+      lang === 'bn' 
+        ? 'বিদ্যমান পাসওয়ার্ড সনাক্ত করা হয়েছে। ড্যাশবোর্ডে প্রবেশ করতে আপনার পাসওয়ার্ড দিন।' 
+        : 'Existing password detected. Please enter your dashboard password to unlock.',
+      'info'
+    );
+  }, [sheetsConfig, lang, showToast]);
 
   const handleSetInitialPassword = async (newPassword: string): Promise<{ success: boolean; error?: string }> => {
     if (!sheetsConfig.webAppUrl || !sheetsConfig.webAppUrl.trim().startsWith('http')) {
@@ -431,6 +534,7 @@ export default function App() {
     // 1. Mark setup as permanently completed
     markFirstTimeSetupCompleted();
     setIsSetupComplete(true);
+    setStartupRoute('LOCK_PAGE');
 
     // 2. Mark current browser session as active (so reload keeps user in dashboard)
     if (typeof window !== 'undefined') {
@@ -1210,20 +1314,22 @@ export default function App() {
     }
   };
 
-  // 0. Remote verification splash: When verifying if the configured remote Google Sheet has an established password
-  if (isVerifyingRemoteSetup) {
+  // 0. CHECKING_BACKEND: Temporary loading screen while verifying backend connection
+  // "3. Show a temporary "Checking secure connection..." loading screen."
+  // Does NOT render FirstTimeSetup before asynchronous check completes!
+  if (startupRoute === 'CHECKING_BACKEND') {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4 transition-colors">
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col items-center justify-center p-4 transition-colors selection:bg-emerald-500 selection:text-white">
         <div className="flex flex-col items-center space-y-4 max-w-sm text-center">
-          <div className="w-12 h-12 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-600/25 animate-pulse">
-            <Loader2 className="w-6 h-6 animate-spin" />
+          <div className="w-14 h-14 rounded-2xl bg-emerald-600 text-white flex items-center justify-center shadow-lg shadow-emerald-600/25 animate-pulse">
+            <Loader2 className="w-7 h-7 animate-spin" />
           </div>
           <div>
-            <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200">
+            <h3 className="text-base font-bold text-slate-800 dark:text-slate-100">
               {branding.title || 'Client Management & Application Tracking'}
             </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">
-              {lang === 'bn' ? 'ডাটাবেজের সাথে সংযোগ পরীক্ষা করা হচ্ছে...' : 'Verifying connection to database...'}
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-2 font-medium">
+              {lang === 'bn' ? 'ডাটাবেজের সাথে সংযোগ পরীক্ষা করা হচ্ছে...' : 'Checking secure connection...'}
             </p>
           </div>
         </div>
@@ -1231,14 +1337,113 @@ export default function App() {
     );
   }
 
-  // 1. First-time open: If initial setup is incomplete, show FirstTimeSetup wizard
-  if (!isSetupComplete) {
+  // 1. BACKEND_ERROR: If remote check fails or no URL found
+  // REQUIREMENT 7:
+  // - DO NOT automatically show FirstTimeSetup.
+  // - DO NOT initialize the database.
+  // - DO NOT create a password.
+  // - Show a clear backend connection/configuration error instead.
+  if (startupRoute === 'BACKEND_ERROR') {
+    return (
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex flex-col justify-between text-slate-900 dark:text-slate-100 transition-colors p-4 sm:p-6 selection:bg-emerald-500 selection:text-white">
+        {/* Top Header with Language & Theme */}
+        <div className="w-full max-w-md mx-auto flex items-center justify-between py-2">
+          <div className="flex items-center space-x-2 text-xs font-semibold text-rose-600 dark:text-rose-400">
+            <ShieldAlert className="w-4 h-4" />
+            <span>{lang === 'bn' ? 'সংযোগ ত্রুটি' : 'Connection Alert'}</span>
+          </div>
+          <div className="flex items-center space-x-2">
+            <button
+              onClick={() => handleLanguageChange(lang === 'en' ? 'bn' : 'en')}
+              className="px-2.5 py-1 text-xs font-semibold rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 shadow-2xs hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              {lang === 'en' ? 'বাংলা' : 'EN'}
+            </button>
+            <button
+              onClick={toggleTheme}
+              className="p-1.5 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-600 dark:text-slate-300 shadow-2xs hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+            >
+              {theme === 'dark' ? <Sun className="w-4 h-4 text-amber-400" /> : <Moon className="w-4 h-4 text-slate-600" />}
+            </button>
+          </div>
+        </div>
+
+        {/* Central Error Card */}
+        <div className="w-full max-w-md mx-auto my-auto bg-white/95 dark:bg-slate-900/90 backdrop-blur-xl rounded-2xl shadow-xl border border-slate-200/80 dark:border-slate-800/80 p-6 sm:p-8 text-center animate-in fade-in zoom-in-95 duration-200">
+          <div className="w-14 h-14 mx-auto rounded-2xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-800/60 flex items-center justify-center text-rose-600 dark:text-rose-400 mb-4 shadow-2xs">
+            <AlertCircle className="w-7 h-7" />
+          </div>
+
+          <h2 className="text-xl font-bold text-slate-900 dark:text-white mb-2">
+            {lang === 'bn' ? 'গুগল শিট ব্যাকএন্ড সংযোগ ব্যর্থ' : 'Backend Connection Error'}
+          </h2>
+
+          <p className="text-xs sm:text-sm text-slate-600 dark:text-slate-400 mb-5 leading-relaxed">
+            {backendError || (lang === 'bn' ? 'গুগল অ্যাপস স্ক্রিপ্ট ব্যাকএন্ডের সাথে সংযোগ স্থাপন করা যায়নি।' : 'Could not establish connection to the Google Apps Script backend.')}
+          </p>
+
+          {sheetsConfig.webAppUrl && (
+            <div className="p-3 bg-slate-100 dark:bg-slate-800/70 rounded-xl text-left text-xs mb-5 font-mono text-slate-700 dark:text-slate-300 break-all border border-slate-200 dark:border-slate-700/60">
+              <span className="block text-[10px] uppercase font-bold text-slate-400 dark:text-slate-500 mb-1">
+                {lang === 'bn' ? 'যাচাইকৃত ইউআরএল:' : 'Checked URL:'}
+              </span>
+              {sheetsConfig.webAppUrl}
+            </div>
+          )}
+
+          <div className="space-y-3">
+            <button
+              onClick={() => checkStartupBackend(true)}
+              className="w-full py-2.5 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 text-white font-semibold text-xs sm:text-sm shadow-md shadow-emerald-600/20 flex items-center justify-center space-x-2 transition-all cursor-pointer"
+            >
+              <RotateCw className="w-4 h-4" />
+              <span>{lang === 'bn' ? 'পুনরায় চেষ্টা করুন' : 'Retry Connection'}</span>
+            </button>
+
+            <button
+              onClick={() => setIsSheetsModalOpen(true)}
+              className="w-full py-2.5 px-4 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-semibold text-xs sm:text-sm border border-slate-200 dark:border-slate-700 flex items-center justify-center space-x-2 transition-all cursor-pointer"
+            >
+              <Database className="w-4 h-4 text-emerald-500" />
+              <span>{lang === 'bn' ? 'ডাটাবেজ সেটিংস / ইউআরএল পরিবর্তন' : 'Database Settings / Change URL'}</span>
+            </button>
+          </div>
+        </div>
+
+        <div className="w-full max-w-md mx-auto py-2 text-center text-xs text-slate-400 dark:text-slate-600">
+          {branding.title}
+        </div>
+
+        {/* Database configuration modal */}
+        <GoogleSheetsModal
+          isOpen={isSheetsModalOpen}
+          onClose={() => setIsSheetsModalOpen(false)}
+          config={sheetsConfig}
+          onSaveConfig={async (newUrl) => {
+            const saved = await handleSaveSheetsConfig(newUrl);
+            if (saved) {
+              setIsSheetsModalOpen(false);
+              checkStartupBackend(true);
+            }
+            return saved;
+          }}
+          onSyncAllToSheet={handleSyncAllToSheet}
+          onPullFromSheet={handlePullFromSheet}
+          isSyncing={isSyncing}
+        />
+      </div>
+    );
+  }
+
+  // 2. FIRST_TIME_SETUP: ONLY allowed when remote backend explicitly confirmed hasPasswordConfigured === false
+  if (startupRoute === 'FIRST_TIME_SETUP' && !isSetupComplete) {
     return (
       <div className="min-h-screen bg-slate-50 dark:bg-slate-950 transition-colors">
         <FirstTimeSetup
           branding={branding}
           config={sheetsConfig}
           onSetupComplete={handleFirstTimeSetupComplete}
+          onExistingPasswordDetected={handleExistingPasswordDetected}
           lang={lang}
           onLanguageChange={handleLanguageChange}
           theme={theme}
@@ -1286,6 +1491,7 @@ export default function App() {
           branding={branding}
           hasPasswordConfigured={hasPasswordConfigured}
           isWebappConfigured={Boolean(sheetsConfig.webAppUrl && sheetsConfig.webAppUrl.trim().startsWith('http'))}
+          webAppUrl={sheetsConfig.webAppUrl}
           onUnlock={handleUnlock}
           onSetInitialPassword={handleSetInitialPassword}
           onOpenSheetsModal={() => setIsSheetsModalOpen(true)}
@@ -1300,7 +1506,13 @@ export default function App() {
           isOpen={isSheetsModalOpen}
           onClose={() => setIsSheetsModalOpen(false)}
           config={sheetsConfig}
-          onSaveConfig={handleSaveSheetsConfig}
+          onSaveConfig={async (newUrl) => {
+            const saved = await handleSaveSheetsConfig(newUrl);
+            if (saved) {
+              checkStartupBackend(true);
+            }
+            return saved;
+          }}
           onSyncAllToSheet={handleSyncAllToSheet}
           onPullFromSheet={handlePullFromSheet}
           isSyncing={isSyncing}

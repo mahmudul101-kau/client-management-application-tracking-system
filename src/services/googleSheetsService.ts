@@ -181,65 +181,91 @@ export interface StoredData {
 }
 
 /**
- * Loads persistent configuration from localStorage, URL params, or build environment variables.
- * Enables shared links and multi-device access without forcing First-Time Setup.
+ * Resolves the Google Apps Script Web App URL in order of precedence:
+ * 1. URL search parameters (?webapp=..., ?script=..., ?url=..., ?sheet=...) for shared links
+ * 2. Vercel / Vite build-time or runtime environment variables (VITE_GOOGLE_SHEETS_WEB_APP_URL, etc.)
+ * 3. Saved localStorage configuration
  */
-export function loadSheetsConfig(): GoogleSheetsConfig {
-  let webAppUrl = '';
-  let status: GoogleSheetsConfig['status'] = 'not_configured';
-  let sheetName: string | undefined = undefined;
-  let lastSyncedAt: string | null = null;
-
-  // 1. Check persistent localStorage first
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY_CONFIG);
-    if (raw) {
-      const parsed = JSON.parse(raw);
-      if (parsed && parsed.webAppUrl) {
-        webAppUrl = normalizeWebAppUrl(parsed.webAppUrl);
-        status = parsed.status || (webAppUrl ? 'connected' : 'not_configured');
-        sheetName = parsed.sheetName;
-        lastSyncedAt = parsed.lastSyncedAt || null;
-      }
-    }
-  } catch (e) {
-    console.error('Error reading sheets config:', e);
-  }
-
-  // 2. Check URL query parameters (?webapp=..., ?script=..., ?url=...) for seamless link sharing
+export function resolveWebAppUrl(): string {
+  // 1. Check URL query parameters (?webapp=..., ?script=..., ?url=..., ?sheet=...) for seamless link sharing
   if (typeof window !== 'undefined') {
     try {
       const urlParams = new URLSearchParams(window.location.search);
       const queryParamUrl = urlParams.get('webapp') || urlParams.get('script') || urlParams.get('url') || urlParams.get('sheet');
       if (queryParamUrl && queryParamUrl.trim().startsWith('http')) {
-        webAppUrl = normalizeWebAppUrl(queryParamUrl);
-        status = 'connected';
+        const clean = normalizeWebAppUrl(queryParamUrl);
         // Persist to localStorage for future reloads and navigation
-        localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify({
-          webAppUrl,
-          status: 'connected',
-          lastSyncedAt: new Date().toISOString()
-        }));
+        try {
+          localStorage.setItem(STORAGE_KEY_CONFIG, JSON.stringify({
+            webAppUrl: clean,
+            status: 'connected',
+            lastSyncedAt: new Date().toISOString()
+          }));
+        } catch {
+          // ignore storage error
+        }
+        return clean;
       }
     } catch (err) {
       console.warn('Could not parse URL query parameters:', err);
     }
   }
 
-  // 3. Check Vercel/Vite environment variables if not present in localStorage
-  if (!webAppUrl) {
-    const envUrl = (
-      (typeof import.meta !== 'undefined' && import.meta.env && (
-        import.meta.env.VITE_GOOGLE_SHEETS_WEB_APP_URL ||
-        import.meta.env.VITE_APPS_SCRIPT_URL ||
-        import.meta.env.VITE_SHEETS_URL ||
-        import.meta.env.VITE_WEB_APP_URL
-      )) || ''
-    ).trim();
+  // 2. Check Vercel/Vite environment variables (VITE_GOOGLE_SHEETS_WEB_APP_URL)
+  const envUrl = (
+    (typeof import.meta !== 'undefined' && import.meta.env && (
+      import.meta.env.VITE_GOOGLE_SHEETS_WEB_APP_URL ||
+      import.meta.env.VITE_APPS_SCRIPT_URL ||
+      import.meta.env.VITE_SHEETS_URL ||
+      import.meta.env.VITE_WEB_APP_URL
+    )) || ''
+  ).trim();
 
-    if (envUrl && envUrl.startsWith('http')) {
-      webAppUrl = normalizeWebAppUrl(envUrl);
-      status = 'connected';
+  if (envUrl && envUrl.startsWith('http')) {
+    return normalizeWebAppUrl(envUrl);
+  }
+
+  // 3. Check persistent localStorage
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_CONFIG);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && parsed.webAppUrl && typeof parsed.webAppUrl === 'string' && parsed.webAppUrl.trim().startsWith('http')) {
+          return normalizeWebAppUrl(parsed.webAppUrl);
+        }
+      }
+    } catch (e) {
+      console.error('Error reading sheets config:', e);
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Loads persistent configuration from URL params, environment variables, or localStorage.
+ * Enables shared links and multi-device access without forcing First-Time Setup.
+ */
+export function loadSheetsConfig(): GoogleSheetsConfig {
+  const webAppUrl = resolveWebAppUrl();
+  let sheetName: string | undefined = undefined;
+  let lastSyncedAt: string | null = null;
+  let status: GoogleSheetsConfig['status'] = webAppUrl ? 'connected' : 'not_configured';
+
+  if (typeof window !== 'undefined') {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY_CONFIG);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed) {
+          sheetName = parsed.sheetName;
+          lastSyncedAt = parsed.lastSyncedAt || null;
+          if (parsed.status) status = parsed.status;
+        }
+      }
+    } catch (e) {
+      console.error('Error reading sheets config:', e);
     }
   }
 
@@ -574,6 +600,10 @@ export async function fetchFromGoogleSheets(webAppUrl: string): Promise<{
 export async function sendMutationToGoogleSheets(
   webAppUrl: string,
   action:
+    | 'ping'
+    | 'test'
+    | 'checkDeviceLock'
+    | 'clearDeviceLoginFailures'
     | 'addClient'
     | 'updateClient'
     | 'deleteClient'
@@ -602,6 +632,10 @@ export async function sendMutationToGoogleSheets(
   verified?: boolean;
   hasPasswordConfigured?: boolean;
   details?: any;
+  locked?: boolean;
+  remainingSeconds?: number;
+  remainingAttempts?: number;
+  deviceId?: string;
 }> {
   try {
     const cleanUrl = normalizeWebAppUrl(webAppUrl);
@@ -635,6 +669,10 @@ export async function sendMutationToGoogleSheets(
       verified: data.verified,
       hasPasswordConfigured: data.hasPasswordConfigured,
       details: data.details,
+      locked: data.locked,
+      remainingSeconds: data.remainingSeconds,
+      remainingAttempts: data.remainingAttempts,
+      deviceId: data.deviceId,
     };
   } catch (err: any) {
     console.error(`Google Sheets mutation ${action} failed:`, err);
@@ -645,24 +683,226 @@ export async function sendMutationToGoogleSheets(
   }
 }
 
+const STORAGE_KEY_DEVICE_ID = 'client_tracking_device_id_v1';
+const STORAGE_KEY_DEVICE_LOCK = 'client_tracking_device_lock_v1';
+const STORAGE_KEY_FAILED_ATTEMPTS = 'client_tracking_failed_attempts_v1';
+
 /**
- * Verifies the dashboard unlock password through Google Apps Script
+ * Returns a persistent, cryptographically random opaque device identifier for this browser/device.
+ * Does not use email, phone number, IP address, or browser fingerprinting.
+ * Never stores passwords, hashes, salts, or authentication secrets.
+ */
+export function getOrCreateDeviceId(): string {
+  if (typeof window === 'undefined') return 'server_device';
+  try {
+    let deviceId = localStorage.getItem(STORAGE_KEY_DEVICE_ID);
+    if (!deviceId || deviceId.trim().length < 8) {
+      if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+        deviceId = crypto.randomUUID();
+      } else {
+        const arr = new Uint8Array(16);
+        if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+          crypto.getRandomValues(arr);
+        } else {
+          for (let i = 0; i < 16; i++) arr[i] = Math.floor(Math.random() * 256);
+        }
+        deviceId = Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+      }
+      localStorage.setItem(STORAGE_KEY_DEVICE_ID, deviceId);
+    }
+    return deviceId;
+  } catch (e) {
+    console.warn('Error reading/generating device ID:', e);
+    return 'fallback_device_id';
+  }
+}
+
+/**
+ * Reads local device lockout cache (seconds remaining and attempt counter).
+ */
+export function getLocalDeviceLock(): {
+  isLocked: boolean;
+  remainingSeconds: number;
+  remainingAttempts: number;
+} {
+  if (typeof window === 'undefined') return { isLocked: false, remainingSeconds: 0, remainingAttempts: 5 };
+  try {
+    const rawLockUntil = localStorage.getItem(STORAGE_KEY_DEVICE_LOCK);
+    if (rawLockUntil) {
+      const lockUntilMs = parseInt(rawLockUntil, 10);
+      const now = Date.now();
+      if (!isNaN(lockUntilMs) && lockUntilMs > now) {
+        const remainingSeconds = Math.ceil((lockUntilMs - now) / 1000);
+        return { isLocked: true, remainingSeconds, remainingAttempts: 0 };
+      } else if (!isNaN(lockUntilMs) && lockUntilMs <= now) {
+        // Lockout period expired
+        localStorage.removeItem(STORAGE_KEY_DEVICE_LOCK);
+        localStorage.removeItem(STORAGE_KEY_FAILED_ATTEMPTS);
+      }
+    }
+
+    const rawAttempts = localStorage.getItem(STORAGE_KEY_FAILED_ATTEMPTS);
+    const failedAttempts = rawAttempts ? (parseInt(rawAttempts, 10) || 0) : 0;
+    return {
+      isLocked: false,
+      remainingSeconds: 0,
+      remainingAttempts: Math.max(0, 5 - failedAttempts),
+    };
+  } catch {
+    return { isLocked: false, remainingSeconds: 0, remainingAttempts: 5 };
+  }
+}
+
+/**
+ * Saves a local device lock for the given duration in seconds.
+ */
+export function setLocalDeviceLock(remainingSeconds: number): void {
+  if (typeof window === 'undefined') return;
+  try {
+    const lockUntilMs = Date.now() + Math.max(1, remainingSeconds) * 1000;
+    localStorage.setItem(STORAGE_KEY_DEVICE_LOCK, String(lockUntilMs));
+    localStorage.setItem(STORAGE_KEY_FAILED_ATTEMPTS, '5');
+  } catch (e) {
+    console.warn('Error saving local device lock:', e);
+  }
+}
+
+/**
+ * Clears local device lockout and failed attempt records upon successful authentication.
+ */
+export function clearLocalDeviceLock(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(STORAGE_KEY_DEVICE_LOCK);
+    localStorage.removeItem(STORAGE_KEY_FAILED_ATTEMPTS);
+  } catch (e) {
+    console.warn('Error clearing local device lock:', e);
+  }
+}
+
+/**
+ * Records a local failed password attempt.
+ */
+export function recordLocalFailedAttempt(): {
+  isLocked: boolean;
+  remainingSeconds: number;
+  remainingAttempts: number;
+} {
+  if (typeof window === 'undefined') return { isLocked: false, remainingSeconds: 0, remainingAttempts: 4 };
+  try {
+    const rawAttempts = localStorage.getItem(STORAGE_KEY_FAILED_ATTEMPTS);
+    const current = rawAttempts ? (parseInt(rawAttempts, 10) || 0) : 0;
+    const nextAttempts = current + 1;
+    localStorage.setItem(STORAGE_KEY_FAILED_ATTEMPTS, String(nextAttempts));
+
+    if (nextAttempts >= 5) {
+      setLocalDeviceLock(3600); // 1-hour lockout
+      return { isLocked: true, remainingSeconds: 3600, remainingAttempts: 0 };
+    }
+    return { isLocked: false, remainingSeconds: 0, remainingAttempts: Math.max(0, 5 - nextAttempts) };
+  } catch {
+    return { isLocked: false, remainingSeconds: 0, remainingAttempts: 4 };
+  }
+}
+
+/**
+ * Checks whether this device is currently locked out from password verification.
+ */
+export async function checkDeviceLockStatus(
+  webAppUrl: string
+): Promise<{
+  locked: boolean;
+  remainingSeconds: number;
+  remainingAttempts: number;
+}> {
+  // 1. Check local lock cache first
+  const localLock = getLocalDeviceLock();
+  if (localLock.isLocked) {
+    return {
+      locked: true,
+      remainingSeconds: localLock.remainingSeconds,
+      remainingAttempts: 0,
+    };
+  }
+
+  if (!webAppUrl || !webAppUrl.trim().startsWith('http')) {
+    return {
+      locked: localLock.isLocked,
+      remainingSeconds: localLock.remainingSeconds,
+      remainingAttempts: localLock.remainingAttempts,
+    };
+  }
+
+  // 2. Query remote Apps Script backend
+  try {
+    const deviceId = getOrCreateDeviceId();
+    const res = await sendMutationToGoogleSheets(webAppUrl, 'checkDeviceLock', { deviceId });
+    if (res.success && res.locked !== undefined) {
+      if (res.locked && res.remainingSeconds && res.remainingSeconds > 0) {
+        setLocalDeviceLock(res.remainingSeconds);
+        return {
+          locked: true,
+          remainingSeconds: res.remainingSeconds,
+          remainingAttempts: 0,
+        };
+      } else {
+        clearLocalDeviceLock();
+        return {
+          locked: false,
+          remainingSeconds: 0,
+          remainingAttempts: res.remainingAttempts !== undefined ? res.remainingAttempts : 5,
+        };
+      }
+    }
+  } catch (e) {
+    console.warn('Error checking device lock status from backend:', e);
+  }
+
+  return {
+    locked: localLock.isLocked,
+    remainingSeconds: localLock.remainingSeconds,
+    remainingAttempts: localLock.remainingAttempts,
+  };
+}
+
+export interface PasswordVerificationResult {
+  success: boolean;
+  verified?: boolean;
+  locked?: boolean;
+  remainingSeconds?: number;
+  remainingAttempts?: number;
+  hasPasswordConfigured?: boolean;
+  error?: string;
+  message?: string;
+}
+
+/**
+ * Verifies the dashboard unlock password through Google Apps Script.
+ * Incorporates device-specific lockout protection (5 failed attempts -> 1-hour block).
  */
 export async function verifyDashboardPassword(
   webAppUrl: string,
   password: string
-): Promise<{
-  success: boolean;
-  verified?: boolean;
-  hasPasswordConfigured?: boolean;
-  error?: string;
-  message?: string;
-}> {
+): Promise<PasswordVerificationResult> {
+  const localLock = getLocalDeviceLock();
+  if (localLock.isLocked) {
+    return {
+      success: false,
+      verified: false,
+      locked: true,
+      remainingSeconds: localLock.remainingSeconds,
+      remainingAttempts: 0,
+      hasPasswordConfigured: true,
+      error: 'Too many failed attempts. This device is temporarily locked.',
+    };
+  }
+
   if (!webAppUrl || !webAppUrl.trim().startsWith('http')) {
     return { success: false, error: 'Google Sheets Web App is not configured.' };
   }
 
-  const res = await sendMutationToGoogleSheets(webAppUrl, 'verifyPassword', { password });
+  const deviceId = getOrCreateDeviceId();
+  const res = await sendMutationToGoogleSheets(webAppUrl, 'verifyPassword', { password, deviceId });
 
   // Handle specific Google Sheets / Apps Script Web App reachability errors (e.g. 404, DNS, invalid deployment URL)
   if (res.error && res.error.includes('HTTP Error 404')) {
@@ -674,22 +914,58 @@ export async function verifyDashboardPassword(
     };
   }
 
-  // If the deployed Apps Script Web App is running an older deployment that predates verifyPassword:
-  if (res.error && res.error.toLowerCase().includes('unknown action')) {
+  // If the backend indicates this device is locked
+  if (res.locked) {
+    const remSec = res.remainingSeconds || 3600;
+    setLocalDeviceLock(remSec);
     return {
       success: false,
       verified: false,
+      locked: true,
+      remainingSeconds: remSec,
+      remainingAttempts: 0,
       hasPasswordConfigured: true,
-      error: 'Google Apps Script requires updating: In your Google Sheet, go to Extensions > Apps Script > Deploy > Manage deployments > Edit > New version > Deploy.',
+      error: res.error || 'Too many failed attempts. This device is temporarily locked.',
     };
   }
 
+  if (res.success && res.verified) {
+    // Correct password! Reset local lockout and attempt counter
+    clearLocalDeviceLock();
+    return {
+      success: true,
+      verified: true,
+      locked: false,
+      remainingAttempts: 5,
+      hasPasswordConfigured: true,
+      message: res.message || 'Password verified successfully',
+    };
+  }
+
+  // If deployed Apps Script Web App returned remainingAttempts
+  if (res.remainingAttempts !== undefined) {
+    return {
+      success: false,
+      verified: false,
+      locked: false,
+      remainingAttempts: res.remainingAttempts,
+      hasPasswordConfigured: res.hasPasswordConfigured !== undefined ? res.hasPasswordConfigured : true,
+      error: res.error || 'Incorrect password',
+    };
+  }
+
+  // Fallback for older deployed Apps Script without device tracking support
+  const failOutcome = recordLocalFailedAttempt();
   return {
-    success: res.success,
-    verified: res.verified,
-    hasPasswordConfigured: res.hasPasswordConfigured,
-    error: res.error,
-    message: res.message,
+    success: false,
+    verified: false,
+    locked: failOutcome.isLocked,
+    remainingSeconds: failOutcome.remainingSeconds,
+    remainingAttempts: failOutcome.remainingAttempts,
+    hasPasswordConfigured: res.hasPasswordConfigured !== undefined ? res.hasPasswordConfigured : true,
+    error: failOutcome.isLocked
+      ? 'Too many failed attempts. This device is temporarily locked.'
+      : res.error || 'Incorrect password',
   };
 }
 
@@ -781,7 +1057,9 @@ export async function setDashboardPassword(
 }
 
 /**
- * Checks if a password has been configured in the Google Sheets database
+ * Checks if a password has been configured in the remote Google Sheets database.
+ * Used at startup to determine whether the app is already in production.
+ * NEVER logs passwords, password hashes, salts, or client records.
  */
 export async function checkPasswordConfigured(
   webAppUrl: string
@@ -790,47 +1068,126 @@ export async function checkPasswordConfigured(
   hasPasswordConfigured?: boolean;
   error?: string;
 }> {
-  if (!webAppUrl || !webAppUrl.trim().startsWith('http')) {
-    return { success: false, hasPasswordConfigured: false };
+  const cleanUrl = normalizeWebAppUrl(webAppUrl);
+  if (!cleanUrl || !cleanUrl.startsWith('http')) {
+    return {
+      success: false,
+      hasPasswordConfigured: false,
+      error: 'Google Apps Script Web App URL is missing or invalid.',
+    };
   }
 
+  // 2. password status request started
+  console.log('[STARTUP_AUTH] 2. password status request started:', cleanUrl);
+
+  // Strategy 1: POST mutation with action: 'checkPasswordStatus'
+  // POST avoids cross-origin 302 redirect handling issues in some browsers
   try {
-    const cleanUrl = normalizeWebAppUrl(webAppUrl);
+    const postRes = await sendMutationToGoogleSheets(cleanUrl, 'checkPasswordStatus', {});
+    // 3. HTTP status
+    console.log('[STARTUP_AUTH] 3. HTTP status (POST): 200 (processed)');
+    // 4. parsed response (NEVER log sensitive data)
+    console.log('[STARTUP_AUTH] 4. parsed response (POST checkPasswordStatus):', {
+      success: postRes.success,
+      hasPasswordConfigured: postRes.hasPasswordConfigured,
+      error: postRes.error,
+    });
+
+    if (postRes.hasPasswordConfigured !== undefined) {
+      // 5. hasPasswordConfigured value
+      console.log('[STARTUP_AUTH] 5. hasPasswordConfigured value:', Boolean(postRes.hasPasswordConfigured));
+      return {
+        success: true,
+        hasPasswordConfigured: Boolean(postRes.hasPasswordConfigured),
+      };
+    }
+
+    // If deployed Apps Script is an older deployment that returns "Unknown action: checkPasswordStatus",
+    // fallback to ping/test or verifyPassword which are supported by all versions of Apps Script!
+    if (postRes.error && postRes.error.toLowerCase().includes('unknown action')) {
+      console.warn('[STARTUP_AUTH] Deployed Apps Script does not have checkPasswordStatus action, testing ping/test fallback...');
+      const pingRes = await sendMutationToGoogleSheets(cleanUrl, 'ping', {});
+      console.log('[STARTUP_AUTH] 4. parsed response (POST ping fallback):', {
+        success: pingRes.success,
+        hasPasswordConfigured: pingRes.hasPasswordConfigured,
+        error: pingRes.error,
+      });
+
+      if (pingRes.hasPasswordConfigured !== undefined) {
+        console.log('[STARTUP_AUTH] 5. hasPasswordConfigured value (from ping):', Boolean(pingRes.hasPasswordConfigured));
+        return {
+          success: true,
+          hasPasswordConfigured: Boolean(pingRes.hasPasswordConfigured),
+        };
+      }
+
+      // If ping didn't include hasPasswordConfigured, test verifyPassword with blank password
+      const verifyRes = await sendMutationToGoogleSheets(cleanUrl, 'verifyPassword', { password: '' });
+      console.log('[STARTUP_AUTH] 4. parsed response (POST verifyPassword check):', {
+        success: verifyRes.success,
+        hasPasswordConfigured: verifyRes.hasPasswordConfigured,
+        error: verifyRes.error,
+      });
+
+      if (verifyRes.hasPasswordConfigured !== undefined) {
+        console.log('[STARTUP_AUTH] 5. hasPasswordConfigured value (from verifyPassword):', Boolean(verifyRes.hasPasswordConfigured));
+        return {
+          success: true,
+          hasPasswordConfigured: Boolean(verifyRes.hasPasswordConfigured),
+        };
+      }
+    }
+
+    if (postRes.error) {
+      return {
+        success: false,
+        hasPasswordConfigured: false,
+        error: postRes.error,
+      };
+    }
+  } catch (postErr: any) {
+    console.warn('[STARTUP_AUTH] POST checkPasswordStatus error:', postErr);
+  }
+
+  // Strategy 2: GET query parameter check fallback
+  try {
     const testUrl = new URL(cleanUrl);
     testUrl.searchParams.set('action', 'checkPasswordStatus');
+
+    console.log('[STARTUP_AUTH] 2. password status request started (GET fallback):', testUrl.toString());
 
     const res = await fetch(testUrl.toString(), {
       method: 'GET',
       headers: { 'Accept': 'application/json' },
     });
 
+    console.log('[STARTUP_AUTH] 3. HTTP status (GET):', res.status);
+
     if (res.ok) {
       const data = await res.json();
+      console.log('[STARTUP_AUTH] 4. parsed response (GET checkPasswordStatus):', {
+        success: data.success,
+        hasPasswordConfigured: data.hasPasswordConfigured,
+        error: data.error,
+      });
+
       if (data.hasPasswordConfigured !== undefined) {
+        console.log('[STARTUP_AUTH] 5. hasPasswordConfigured value:', Boolean(data.hasPasswordConfigured));
         return {
-          success: !!data.success,
+          success: true,
           hasPasswordConfigured: Boolean(data.hasPasswordConfigured),
         };
       }
     }
-  } catch (err) {
-    console.warn('GET checkPasswordStatus failed, trying POST fallback:', err);
+  } catch (err: any) {
+    console.warn('[STARTUP_AUTH] GET checkPasswordStatus error:', err);
   }
 
-  // Fallback via POST mutation
-  try {
-    const postRes = await sendMutationToGoogleSheets(webAppUrl, 'checkPasswordStatus', {});
-    if (postRes.hasPasswordConfigured !== undefined) {
-      return {
-        success: !!postRes.success,
-        hasPasswordConfigured: Boolean(postRes.hasPasswordConfigured),
-      };
-    }
-  } catch (postErr) {
-    console.warn('POST checkPasswordStatus failed:', postErr);
-  }
-
-  return { success: false, hasPasswordConfigured: false };
+  return {
+    success: false,
+    hasPasswordConfigured: false,
+    error: 'Could not verify password configuration with Google Apps Script backend.',
+  };
 }
 
 export interface DatabaseInitResult {

@@ -18,12 +18,24 @@ import {
 } from 'lucide-react';
 import { AppBranding, Language, ThemeMode } from '../types';
 import { translations } from '../services/translations';
+import { 
+  checkDeviceLockStatus, 
+  getLocalDeviceLock, 
+  clearLocalDeviceLock 
+} from '../services/googleSheetsService';
 
 interface LockPageProps {
   branding: AppBranding;
   hasPasswordConfigured: boolean;
   isWebappConfigured: boolean;
-  onUnlock: (password: string) => Promise<{ success: boolean; error?: string }>;
+  webAppUrl?: string;
+  onUnlock: (password: string) => Promise<{
+    success: boolean;
+    error?: string;
+    locked?: boolean;
+    remainingSeconds?: number;
+    remainingAttempts?: number;
+  }>;
   onSetInitialPassword: (newPassword: string) => Promise<{ success: boolean; error?: string }>;
   onOpenSheetsModal: () => void;
   lang: Language;
@@ -36,6 +48,7 @@ export const LockPage: React.FC<LockPageProps> = ({
   branding,
   hasPasswordConfigured,
   isWebappConfigured,
+  webAppUrl = '',
   onUnlock,
   onSetInitialPassword,
   onOpenSheetsModal,
@@ -52,6 +65,11 @@ export const LockPage: React.FC<LockPageProps> = ({
   const [isShaking, setIsShaking] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
+  // Device-specific lockout state (5 failed attempts -> 1-hour block)
+  const [isDeviceLocked, setIsDeviceLocked] = useState(false);
+  const [remainingLockSeconds, setRemainingLockSeconds] = useState(0);
+  const [remainingAttempts, setRemainingAttempts] = useState<number | null>(null);
+
   // Setup mode states (if no password is set yet)
   const [isSetupMode, setIsSetupMode] = useState(!hasPasswordConfigured);
   const [newPassword, setNewPassword] = useState('');
@@ -66,13 +84,80 @@ export const LockPage: React.FC<LockPageProps> = ({
     setIsSetupMode(!hasPasswordConfigured);
   }, [hasPasswordConfigured]);
 
+  // Initial and remote check for device lockout
+  useEffect(() => {
+    let isMounted = true;
+
+    // 1. Immediate local cache check
+    const local = getLocalDeviceLock();
+    if (local.isLocked && local.remainingSeconds > 0) {
+      setIsDeviceLocked(true);
+      setRemainingLockSeconds(local.remainingSeconds);
+      setRemainingAttempts(0);
+    } else if (local.remainingAttempts < 5) {
+      setRemainingAttempts(local.remainingAttempts);
+    }
+
+    // 2. Query remote Google Apps Script backend for persistent lockout state
+    if (webAppUrl && webAppUrl.trim().startsWith('http')) {
+      checkDeviceLockStatus(webAppUrl).then((status) => {
+        if (!isMounted) return;
+        if (status.locked && status.remainingSeconds > 0) {
+          setIsDeviceLocked(true);
+          setRemainingLockSeconds(status.remainingSeconds);
+          setRemainingAttempts(0);
+        } else {
+          setIsDeviceLocked(false);
+          setRemainingLockSeconds(0);
+          if (status.remainingAttempts !== undefined) {
+            setRemainingAttempts(status.remainingAttempts);
+          }
+        }
+      }).catch((e) => {
+        console.warn('Error checking device lock status from backend:', e);
+      });
+    }
+
+    return () => {
+      isMounted = false;
+    };
+  }, [webAppUrl]);
+
+  // Countdown timer for lockout duration
+  useEffect(() => {
+    if (!isDeviceLocked || remainingLockSeconds <= 0) return;
+
+    const timer = setInterval(() => {
+      setRemainingLockSeconds((prev) => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          setIsDeviceLocked(false);
+          setRemainingAttempts(5);
+          setErrorMessage(null);
+          clearLocalDeviceLock();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [isDeviceLocked, remainingLockSeconds]);
+
+  // Format seconds into MM:SS (e.g. 59:59)
+  const formatCountdown = (totalSeconds: number): string => {
+    const mins = Math.floor(Math.max(0, totalSeconds) / 60);
+    const secs = Math.max(0, totalSeconds) % 60;
+    return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  };
+
   useEffect(() => {
     if (isSetupMode) {
       newPasswordInputRef.current?.focus();
-    } else {
+    } else if (!isDeviceLocked) {
       passwordInputRef.current?.focus();
     }
-  }, [isSetupMode]);
+  }, [isSetupMode, isDeviceLocked]);
 
   const triggerShake = () => {
     setIsShaking(true);
@@ -83,6 +168,8 @@ export const LockPage: React.FC<LockPageProps> = ({
 
   const handleUnlockSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isDeviceLocked) return;
+
     if (!password.trim()) {
       setErrorMessage(lang === 'bn' ? 'অনুগ্রহ করে পাসওয়ার্ড দিন।' : 'Please enter your password.');
       triggerShake();
@@ -95,6 +182,15 @@ export const LockPage: React.FC<LockPageProps> = ({
     try {
       const res = await onUnlock(password);
       if (!res.success) {
+        if (res.locked) {
+          setIsDeviceLocked(true);
+          setRemainingLockSeconds(res.remainingSeconds || 3600);
+          setRemainingAttempts(0);
+        } else {
+          if (res.remainingAttempts !== undefined) {
+            setRemainingAttempts(res.remainingAttempts);
+          }
+        }
         setErrorMessage(res.error || t.incorrectPassword);
         triggerShake();
         setPassword('');
@@ -303,8 +399,35 @@ export const LockPage: React.FC<LockPageProps> = ({
               </p>
             </div>
 
+            {/* Device Lockout Alert Banner (5 Failed Attempts -> 1 Hour Block) */}
+            {isDeviceLocked && (
+              <div 
+                id="lock-device-locked-banner"
+                role="alert"
+                className="mb-5 p-4 rounded-xl bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900/70 text-rose-800 dark:text-rose-200 shadow-sm animate-in fade-in zoom-in-95 duration-200"
+              >
+                <div className="flex items-start space-x-3">
+                  <div className="w-8 h-8 rounded-lg bg-rose-100 dark:bg-rose-900/50 flex items-center justify-center shrink-0 text-rose-600 dark:text-rose-400 mt-0.5">
+                    <ShieldAlert className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-bold text-sm text-rose-900 dark:text-rose-100">
+                      {lang === 'bn' ? 'অনেকবার ভুল পাসওয়ার্ড দেওয়া হয়েছে।' : 'Too many failed attempts.'}
+                    </h3>
+                    <p className="text-xs text-rose-700 dark:text-rose-300 mt-0.5 font-medium">
+                      {lang === 'bn' ? 'এই ডিভাইসটি সাময়িকভাবে লক করা হয়েছে।' : 'This device is temporarily locked.'}
+                    </p>
+                    <div className="mt-2.5 inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-white/90 dark:bg-slate-900/90 border border-rose-300 dark:border-rose-800/80 font-mono font-bold text-xs sm:text-sm text-rose-700 dark:text-rose-300 shadow-2xs">
+                      <span>{lang === 'bn' ? 'পুনরায় চেষ্টা করুন:' : 'Try again in'}</span>
+                      <span className="tabular-nums tracking-wider text-rose-800 dark:text-rose-200">{formatCountdown(remainingLockSeconds)}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Error Message Alert Banner */}
-            {errorMessage && (
+            {!isDeviceLocked && errorMessage && (
               <div 
                 id="lock-error-banner"
                 role="alert"
@@ -312,7 +435,16 @@ export const LockPage: React.FC<LockPageProps> = ({
               >
                 <div className="flex items-start space-x-2.5">
                   <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-500 dark:text-red-400" />
-                  <span className="font-medium flex-1 leading-relaxed">{errorMessage}</span>
+                  <div className="flex-1 leading-relaxed">
+                    <span className="font-medium">{errorMessage}</span>
+                    {remainingAttempts !== null && remainingAttempts > 0 && remainingAttempts < 5 && (
+                      <span className="block mt-1 font-semibold text-rose-700 dark:text-rose-300">
+                        {lang === 'bn' 
+                          ? `(আর ${remainingAttempts}টি প্রচেষ্টা বাকি আছে)` 
+                          : `(${remainingAttempts} ${remainingAttempts === 1 ? 'attempt' : 'attempts'} remaining)`}
+                      </span>
+                    )}
+                  </div>
                 </div>
                 {(errorMessage.includes('404') || errorMessage.toLowerCase().includes('google apps script') || errorMessage.toLowerCase().includes('not configured')) && (
                   <div className="pt-1.5 pl-6 flex items-center gap-2">
@@ -394,31 +526,52 @@ export const LockPage: React.FC<LockPageProps> = ({
                         setPassword(e.target.value);
                         if (errorMessage) setErrorMessage(null);
                       }}
-                      placeholder={lang === 'bn' ? 'পাসওয়ার্ড লিখুন...' : 'Enter your password...'}
-                      disabled={loading}
+                      placeholder={
+                        isDeviceLocked
+                          ? (lang === 'bn' ? 'ডিভাইসটি ১ ঘণ্টার জন্য লক রয়েছে' : 'Device is locked for 1 hour')
+                          : (lang === 'bn' ? 'পাসওয়ার্ড লিখুন...' : 'Enter your password...')
+                      }
+                      disabled={loading || isDeviceLocked}
                       autoComplete="current-password"
-                      className="w-full pl-10 pr-11 py-3 text-sm bg-slate-50/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 dark:focus:ring-emerald-400/20 dark:focus:border-emerald-500 transition-all font-medium"
+                      className="w-full pl-10 pr-11 py-3 text-sm bg-slate-50/80 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700/80 rounded-xl text-slate-900 dark:text-white placeholder-slate-400 focus:outline-hidden focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 dark:focus:ring-emerald-400/20 dark:focus:border-emerald-500 transition-all font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                     />
                     <button
                       type="button"
                       onClick={() => setShowPassword(!showPassword)}
-                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer transition-colors"
+                      disabled={isDeviceLocked}
+                      className="absolute inset-y-0 right-0 pr-3.5 flex items-center text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                       tabIndex={-1}
                       title={showPassword ? 'Hide password' : 'Show password'}
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+
+                  {remainingAttempts !== null && remainingAttempts > 0 && remainingAttempts < 5 && !isDeviceLocked && (
+                    <p className="mt-1.5 text-xs text-rose-600 dark:text-rose-400 font-medium flex items-center gap-1">
+                      <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                      <span>
+                        {lang === 'bn'
+                          ? `আর ${remainingAttempts}টি ভুল হলে ১ ঘণ্টার জন্য ডিভাইস লক হবে`
+                          : `${remainingAttempts} ${remainingAttempts === 1 ? 'attempt' : 'attempts'} remaining before 1-hour lockout`}
+                      </span>
+                    </p>
+                  )}
                 </div>
 
                 {/* Unlock Button */}
                 <button
                   id="btn-unlock-dashboard"
                   type="submit"
-                  disabled={loading || !password.trim()}
+                  disabled={loading || isDeviceLocked || !password.trim()}
                   className="w-full flex items-center justify-center space-x-2 py-3 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 active:scale-[0.99] dark:bg-emerald-600 dark:hover:bg-emerald-500 text-white text-sm font-semibold shadow-sm hover:shadow-md transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                 >
-                  {loading ? (
+                  {isDeviceLocked ? (
+                    <>
+                      <ShieldAlert className="w-4 h-4 text-rose-300" />
+                      <span>{lang === 'bn' ? `লক করা হয়েছে (${formatCountdown(remainingLockSeconds)})` : `Locked (${formatCountdown(remainingLockSeconds)})`}</span>
+                    </>
+                  ) : loading ? (
                     <>
                       <Loader2 className="w-4 h-4 animate-spin text-white" />
                       <span>{t.unlocking}</span>
