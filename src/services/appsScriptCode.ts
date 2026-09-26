@@ -36,47 +36,93 @@ function doPost(e) {
   return handleRequest(e);
 }
 
+function getSheetContext(ss) {
+  var allSheets = ss.getSheets();
+  var map = {};
+  for (var i = 0; i < allSheets.length; i++) {
+    map[allSheets[i].getName()] = allSheets[i];
+  }
+  return {
+    ss: ss,
+    sheets: map,
+    getSheet: function(name) {
+      if (this.sheets[name]) return this.sheets[name];
+      var s = this.ss.getSheetByName(name);
+      if (s) this.sheets[name] = s;
+      return s;
+    }
+  };
+}
+
 function handleRequest(e) {
-  var lock = LockService.getScriptLock();
-  lock.tryLock(15000);
+  var params = (e && e.parameter) ? e.parameter : {};
+  var postData = {};
+  if (e && e.postData && e.postData.contents) {
+    try {
+      postData = JSON.parse(e.postData.contents);
+    } catch (err) {
+      postData = {};
+    }
+  }
+  
+  // Check postData first, then URL query parameters
+  var rawAction = (postData && postData.action) || (params && params.action) || 'getAll';
+  var action = String(rawAction).trim();
+  var actionLower = action.toLowerCase();
+  
+  // 1. READ-ONLY ACTIONS do NOT acquire the global ScriptLock:
+  // - getAll / readAll
+  // - ping / test
+  // - checkPasswordStatus
+  // - checkDeviceLock
+  // - getPublicBranding / getBranding
+  // - verifyDatabase
+  var isReadOnly = (
+    actionLower === 'getall' ||
+    actionLower === 'readall' ||
+    actionLower === 'ping' ||
+    actionLower === 'test' ||
+    actionLower === 'checkpasswordstatus' ||
+    actionLower === 'checkdevicelock' ||
+    actionLower === 'getpublicbranding' ||
+    actionLower === 'getbranding' ||
+    actionLower === 'verifydatabase'
+  );
+
+  var lock = null;
+  if (!isReadOnly) {
+    lock = LockService.getScriptLock();
+    lock.tryLock(15000);
+  }
   
   try {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
-    setupSheetsIfMissing(ss);
-    
-    var params = (e && e.parameter) ? e.parameter : {};
-    var postData = {};
-    if (e && e.postData && e.postData.contents) {
-      try {
-        postData = JSON.parse(e.postData.contents);
-      } catch (err) {
-        postData = {};
-      }
+    var ctx = getSheetContext(ss);
+    if (!isReadOnly) {
+      setupSheetsIfMissing(ss, ctx);
     }
-    
-    // Check postData first, then URL query parameters
-    var rawAction = (postData && postData.action) || (params && params.action) || 'getAll';
-    var action = String(rawAction).trim();
-    var actionLower = action.toLowerCase();
     
     var response = { success: true };
     
     if (actionLower === 'ping' || actionLower === 'test') {
       response.message = 'Successfully connected to Google Sheet';
       response.sheetName = ss.getName();
-      response.clientsCount = Math.max(0, getClientsSheet(ss).getLastRow() - 1);
-      response.categoriesCount = Math.max(0, getCategoriesSheet(ss).getLastRow() - 1);
-      response.statusesCount = Math.max(0, getStatusesSheet(ss).getLastRow() - 1);
+      var clSheet = ctx.getSheet('Clients');
+      var catSheet = ctx.getSheet('Categories');
+      var stSheet = ctx.getSheet('ApplicationStatuses');
+      response.clientsCount = clSheet ? Math.max(0, clSheet.getLastRow() - 1) : 0;
+      response.categoriesCount = catSheet ? Math.max(0, catSheet.getLastRow() - 1) : 0;
+      response.statusesCount = stSheet ? Math.max(0, stSheet.getLastRow() - 1) : 0;
 
       // Check if dashboard password is configured & load public branding
-      var sSheet = ss.getSheetByName('Settings');
+      var sSheet = ctx.getSheet('Settings');
       var testHasPass = false;
       var pingTitle = '';
       var pingSlogan = '';
       var pingLogo = '';
-      if (sSheet && sSheet.getLastRow() > 1) {
-        var sVals = sSheet.getRange(2, 1, sSheet.getLastRow() - 1, 2).getValues();
-        for (var st = 0; st < sVals.length; st++) {
+      if (sSheet) {
+        var sVals = sSheet.getDataRange().getValues();
+        for (var st = 1; st < sVals.length; st++) {
           var sk = String(sVals[st][0] || '').trim();
           var sv = String(sVals[st][1] !== undefined && sVals[st][1] !== null ? sVals[st][1] : '');
           if (sk === 'dashboard_password_hash') {
@@ -100,10 +146,10 @@ function handleRequest(e) {
         logoUrl: pingLogo
       };
     } else if (actionLower === 'getall' || actionLower === 'readall') {
-      response.clients = readClients(ss);
-      response.categories = readCategories(ss);
-      response.applicationStatuses = readStatuses(ss);
-      response.settings = readSettings(ss);
+      response.clients = readClients(ss, ctx);
+      response.categories = readCategories(ss, ctx);
+      response.applicationStatuses = readStatuses(ss, ctx);
+      response.settings = readSettings(ss, ctx);
       response.sheetName = ss.getName();
     } else if (actionLower === 'saveall' || actionLower === 'syncall') {
       if (postData.categories && Array.isArray(postData.categories)) {
@@ -121,10 +167,10 @@ function handleRequest(e) {
         writeSettings(ss, postData.branding);
       }
       response.message = 'All records successfully synchronized to Google Sheets';
-      response.clients = readClients(ss);
-      response.categories = readCategories(ss);
-      response.applicationStatuses = readStatuses(ss);
-      response.settings = readSettings(ss);
+      response.clients = readClients(ss, ctx);
+      response.categories = readCategories(ss, ctx);
+      response.applicationStatuses = readStatuses(ss, ctx);
+      response.settings = readSettings(ss, ctx);
     } else if (actionLower === 'addclient' || actionLower === 'createclient') {
       response.client = insertOrUpdateClient(ss, postData.client || postData);
       response.message = 'Client added successfully to Google Sheets';
@@ -152,7 +198,7 @@ function handleRequest(e) {
       response.status = addedStatus;
       response.success = true;
       response.message = 'Status ' + addedStatus.id + ' added successfully to Google Sheets';
-      response.applicationStatuses = readStatuses(ss);
+      response.applicationStatuses = readStatuses(ss, ctx);
     } else if (actionLower === 'updatestatus' || actionLower === 'editstatus') {
       // 2. UPDATE APPLICATION STATUS
       var statusUpdateInput = postData.status || postData.statusData || postData.data || postData;
@@ -160,7 +206,7 @@ function handleRequest(e) {
       response.status = updatedStatus;
       response.success = true;
       response.message = 'Status ' + updatedStatus.id + ' updated successfully in Google Sheets';
-      response.applicationStatuses = readStatuses(ss);
+      response.applicationStatuses = readStatuses(ss, ctx);
     } else if (actionLower === 'deletestatus' || actionLower === 'removestatus') {
       // 3. DELETE APPLICATION STATUS
       var targetStatusId = postData.statusId || postData.id || params.statusId || params.id || (postData.status && postData.status.id);
@@ -172,7 +218,7 @@ function handleRequest(e) {
       response.message = wasDeleted 
         ? 'Status ' + targetStatusId + ' deleted successfully from Google Sheets' 
         : 'Status ' + targetStatusId + ' not found or already deleted';
-      response.applicationStatuses = readStatuses(ss);
+      response.applicationStatuses = readStatuses(ss, ctx);
     } else if (
       actionLower === 'deactivatestatus' || 
       actionLower === 'activatestatus' || 
@@ -194,13 +240,13 @@ function handleRequest(e) {
       response.message = toggledStatus 
         ? 'Status ' + toggleStatusId + ' set to ' + toggledStatus.status + ' in Google Sheets'
         : 'Status ' + toggleStatusId + ' not found in Google Sheets';
-      response.applicationStatuses = readStatuses(ss);
+      response.applicationStatuses = readStatuses(ss, ctx);
     } else if (actionLower === 'savesettings' || actionLower === 'savebranding') {
       response.settings = writeSettings(ss, postData.settings || postData.branding || postData);
       response.message = 'Settings saved to Google Sheets';
     } else if (action === 'checkDeviceLock' || actionLower === 'checkdevicelock') {
       var devId = String(postData.deviceId || params.deviceId || '').trim();
-      var secState = getDeviceSecurityState(ss, devId);
+      var secState = getDeviceSecurityState(ss, devId, ctx);
       response.success = true;
       response.deviceId = devId;
       response.locked = secState.isLocked;
@@ -210,13 +256,13 @@ function handleRequest(e) {
     } else if (action === 'clearDeviceLoginFailures' || actionLower === 'cleardeviceloginfailures') {
       var devIdToClear = String(postData.deviceId || params.deviceId || '').trim();
       if (devIdToClear) {
-        recordDeviceLoginSuccess(ss, devIdToClear);
+        recordDeviceLoginSuccess(ss, devIdToClear, ctx);
       }
       response.success = true;
       response.message = 'Device login failures cleared';
     } else if (action === 'recordFailedLogin' || actionLower === 'recordfailedlogin') {
       var devIdToFail = String(postData.deviceId || params.deviceId || '').trim();
-      var failRes = recordDeviceLoginFailure(ss, devIdToFail);
+      var failRes = recordDeviceLoginFailure(ss, devIdToFail, ctx);
       response.success = true;
       response.deviceId = devIdToFail;
       response.locked = failRes.isLocked;
@@ -234,7 +280,7 @@ function handleRequest(e) {
 
       // Check if device is currently locked
       if (deviceId) {
-        var devState = getDeviceSecurityState(ss, deviceId);
+        var devState = getDeviceSecurityState(ss, deviceId, ctx);
         if (devState.isLocked) {
           response.success = false;
           response.verified = false;
@@ -247,13 +293,12 @@ function handleRequest(e) {
         }
       }
 
-      var sheet = getSettingsSheet(ss);
-      var lastRow = sheet.getLastRow();
+      var sheet = ctx ? ctx.getSheet('Settings') : getSettingsSheet(ss);
       var storedHash = '';
       var storedSalt = '';
-      if (lastRow > 1) {
-        var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-        for (var sv = 0; sv < sVals.length; sv++) {
+      if (sheet) {
+        var sVals = sheet.getDataRange().getValues();
+        for (var sv = 1; sv < sVals.length; sv++) {
           var sk = String(sVals[sv][0] || '').trim();
           if (sk === 'dashboard_password_hash') storedHash = String(sVals[sv][1] || '');
           if (sk === 'dashboard_password_salt') storedSalt = String(sVals[sv][1] || '');
@@ -275,7 +320,7 @@ function handleRequest(e) {
           var computedHash = sha256Hex(storedSalt + ':' + enteredPassword);
           if (computedHash === storedHash) {
             if (deviceId) {
-              recordDeviceLoginSuccess(ss, deviceId);
+              recordDeviceLoginSuccess(ss, deviceId, ctx);
             }
             response.success = true;
             response.verified = true;
@@ -284,7 +329,7 @@ function handleRequest(e) {
             response.remainingAttempts = 5;
             response.message = 'Password verified successfully';
           } else {
-            var failResult = deviceId ? recordDeviceLoginFailure(ss, deviceId) : { isLocked: false, remainingAttempts: 4, remainingSeconds: 0 };
+            var failResult = deviceId ? recordDeviceLoginFailure(ss, deviceId, ctx) : { isLocked: false, remainingAttempts: 4, remainingSeconds: 0 };
             response.success = false;
             response.verified = false;
             response.locked = failResult.isLocked;
@@ -304,13 +349,12 @@ function handleRequest(e) {
         response.success = false;
         response.error = 'Password must be at least 4 characters long';
       } else {
-        var sheet = getSettingsSheet(ss);
-        var lastRow = sheet.getLastRow();
+        var sheet = ctx ? ctx.getSheet('Settings') : getSettingsSheet(ss);
         var storedHash = '';
         var storedSalt = '';
-        if (lastRow > 1) {
-          var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-          for (var sv = 0; sv < sVals.length; sv++) {
+        if (sheet) {
+          var sVals = sheet.getDataRange().getValues();
+          for (var sv = 1; sv < sVals.length; sv++) {
             var sk = String(sVals[sv][0] || '').trim();
             if (sk === 'dashboard_password_hash') storedHash = String(sVals[sv][1] || '').trim();
             if (sk === 'dashboard_password_salt') storedSalt = String(sVals[sv][1] || '').trim();
@@ -347,15 +391,14 @@ function handleRequest(e) {
         }
       }
     } else if (action === 'checkPasswordStatus' || actionLower === 'checkpasswordstatus') {
-      var sheet = getSettingsSheet(ss);
-      var lastRow = sheet.getLastRow();
+      var sheet = ctx ? ctx.getSheet('Settings') : ss.getSheetByName('Settings');
       var storedHash = '';
       var appTitle = '';
       var appSlogan = '';
       var logoUrl = '';
-      if (lastRow > 1) {
-        var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-        for (var sv = 0; sv < sVals.length; sv++) {
+      if (sheet) {
+        var sVals = sheet.getDataRange().getValues();
+        for (var sv = 1; sv < sVals.length; sv++) {
           var sk = String(sVals[sv][0] || '').trim();
           var sVal = String(sVals[sv][1] !== undefined && sVals[sv][1] !== null ? sVals[sv][1] : '');
           if (sk === 'dashboard_password_hash') {
@@ -385,14 +428,13 @@ function handleRequest(e) {
       action === 'getBranding' || 
       actionLower === 'getbranding'
     ) {
-      var sheet = getSettingsSheet(ss);
-      var lastRow = sheet.getLastRow();
+      var sheet = ctx ? ctx.getSheet('Settings') : getSettingsSheet(ss);
       var appTitle = '';
       var appSlogan = '';
       var logoUrl = '';
-      if (lastRow > 1) {
-        var sVals = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-        for (var sv = 0; sv < sVals.length; sv++) {
+      if (sheet) {
+        var sVals = sheet.getDataRange().getValues();
+        for (var sv = 1; sv < sVals.length; sv++) {
           var sk = String(sVals[sv][0] || '').trim();
           var sVal = String(sVals[sv][1] !== undefined && sVals[sv][1] !== null ? sVals[sv][1] : '');
           if (sk === 'app_title' || sk === 'title') {
@@ -439,7 +481,7 @@ function handleRequest(e) {
         }
         response.success = true;
         response.message = 'Processed action ' + action + ' via sync fallback';
-        response.applicationStatuses = readStatuses(ss);
+        response.applicationStatuses = readStatuses(ss, ctx);
       } else {
         response.success = false;
         response.error = 'Unknown action: ' + action;
@@ -454,12 +496,16 @@ function handleRequest(e) {
       error: error.toString()
     })).setMimeType(ContentService.MimeType.JSON);
   } finally {
-    lock.releaseLock();
+    if (lock) {
+      try {
+        lock.releaseLock();
+      } catch (lockErr) {}
+    }
   }
 }
 
-function getClientsSheet(ss) {
-  var sheet = ss.getSheetByName('Clients');
+function getClientsSheet(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('Clients') : ss.getSheetByName('Clients');
   if (!sheet) {
     sheet = ss.insertSheet('Clients');
     sheet.appendRow([
@@ -476,12 +522,13 @@ function getClientsSheet(ss) {
       'Notes'
     ]);
     sheet.getRange(1, 1, 1, 11).setFontWeight('bold').setBackground('#f1f5f9');
+    if (ctx && ctx.sheets) ctx.sheets['Clients'] = sheet;
   }
   return sheet;
 }
 
-function getCategoriesSheet(ss) {
-  var sheet = ss.getSheetByName('Categories');
+function getCategoriesSheet(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('Categories') : ss.getSheetByName('Categories');
   if (!sheet) {
     sheet = ss.insertSheet('Categories');
     sheet.appendRow([
@@ -491,12 +538,13 @@ function getCategoriesSheet(ss) {
       'Created Date'
     ]);
     sheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#f1f5f9');
+    if (ctx && ctx.sheets) ctx.sheets['Categories'] = sheet;
   }
   return sheet;
 }
 
-function getStatusesSheet(ss) {
-  var sheet = ss.getSheetByName('ApplicationStatuses');
+function getStatusesSheet(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('ApplicationStatuses') : ss.getSheetByName('ApplicationStatuses');
   if (!sheet) {
     sheet = ss.insertSheet('ApplicationStatuses');
     sheet.appendRow([
@@ -506,12 +554,13 @@ function getStatusesSheet(ss) {
       'Created Date'
     ]);
     sheet.getRange(1, 1, 1, 4).setFontWeight('bold').setBackground('#f1f5f9');
+    if (ctx && ctx.sheets) ctx.sheets['ApplicationStatuses'] = sheet;
   }
   return sheet;
 }
 
-function getSettingsSheet(ss) {
-  var sheet = ss.getSheetByName('Settings');
+function getSettingsSheet(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('Settings') : ss.getSheetByName('Settings');
   if (!sheet) {
     sheet = ss.insertSheet('Settings');
     sheet.appendRow([
@@ -519,12 +568,13 @@ function getSettingsSheet(ss) {
       'Setting Value'
     ]);
     sheet.getRange(1, 1, 1, 2).setFontWeight('bold').setBackground('#f1f5f9');
+    if (ctx && ctx.sheets) ctx.sheets['Settings'] = sheet;
   }
   return sheet;
 }
 
-function getSecuritySheet(ss) {
-  var sheet = ss.getSheetByName('DashboardSecurity');
+function getSecuritySheet(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('DashboardSecurity') : ss.getSheetByName('DashboardSecurity');
   if (!sheet) {
     sheet = ss.insertSheet('DashboardSecurity');
     sheet.appendRow([
@@ -535,21 +585,24 @@ function getSecuritySheet(ss) {
       'Created Date'
     ]);
     sheet.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#f1f5f9');
+    if (ctx && ctx.sheets) ctx.sheets['DashboardSecurity'] = sheet;
   }
   return sheet;
 }
 
-function getDeviceSecurityState(ss, deviceId) {
+function getDeviceSecurityState(ss, deviceId, ctx) {
   if (!deviceId) {
     return { rowIndex: -1, failedAttempts: 0, lockedUntilMs: 0, isLocked: false, remainingSeconds: 0, remainingAttempts: 5 };
   }
-  var sheet = getSecuritySheet(ss);
-  var lastRow = sheet.getLastRow();
+  var sheet = ctx ? ctx.getSheet('DashboardSecurity') : ss.getSheetByName('DashboardSecurity');
+  if (!sheet) {
+    return { rowIndex: -1, failedAttempts: 0, lockedUntilMs: 0, isLocked: false, remainingSeconds: 0, remainingAttempts: 5 };
+  }
+  var vals = sheet.getDataRange().getValues();
   var now = new Date().getTime();
 
-  if (lastRow > 1) {
-    var vals = sheet.getRange(2, 1, lastRow - 1, 5).getValues();
-    for (var i = 0; i < vals.length; i++) {
+  if (vals && vals.length > 1) {
+    for (var i = 1; i < vals.length; i++) {
       var rowDeviceId = String(vals[i][0] || '').trim();
       if (rowDeviceId === deviceId) {
         var failedAttempts = parseInt(vals[i][1], 10) || 0;
@@ -565,15 +618,16 @@ function getDeviceSecurityState(ss, deviceId) {
           isLocked = true;
           remainingSeconds = Math.ceil((lockedUntilMs - now) / 1000);
         } else if (lockedUntilMs > 0 && lockedUntilMs <= now) {
-          // Lockout period has expired! Reset failed attempts
+          // Lockout period has expired!
+          // Strictly read-only: do NOT write or reset the sheet without a lock.
+          // The persistent reset happens during a write operation (e.g. recordDeviceLoginSuccess).
           failedAttempts = 0;
-          sheet.getRange(i + 2, 2).setValue(0);
-          sheet.getRange(i + 2, 3).setValue('');
+          lockedUntilMs = 0;
         }
 
         var remainingAttempts = isLocked ? 0 : Math.max(0, 5 - failedAttempts);
         return {
-          rowIndex: i + 2,
+          rowIndex: i + 1,
           failedAttempts: failedAttempts,
           lockedUntilMs: isLocked ? lockedUntilMs : 0,
           isLocked: isLocked,
@@ -594,10 +648,10 @@ function getDeviceSecurityState(ss, deviceId) {
   };
 }
 
-function recordDeviceLoginSuccess(ss, deviceId) {
+function recordDeviceLoginSuccess(ss, deviceId, ctx) {
   if (!deviceId) return;
-  var sheet = getSecuritySheet(ss);
-  var state = getDeviceSecurityState(ss, deviceId);
+  var sheet = ctx ? ctx.getSheet('DashboardSecurity') : getSecuritySheet(ss);
+  var state = getDeviceSecurityState(ss, deviceId, ctx);
   var nowIso = new Date().toISOString();
   if (state.rowIndex > 1) {
     sheet.getRange(state.rowIndex, 2).setValue(0);
@@ -607,12 +661,12 @@ function recordDeviceLoginSuccess(ss, deviceId) {
   }
 }
 
-function recordDeviceLoginFailure(ss, deviceId) {
+function recordDeviceLoginFailure(ss, deviceId, ctx) {
   if (!deviceId) {
     return { isLocked: false, remainingAttempts: 4, remainingSeconds: 0, failedAttempts: 1 };
   }
-  var sheet = getSecuritySheet(ss);
-  var state = getDeviceSecurityState(ss, deviceId);
+  var sheet = ctx ? ctx.getSheet('DashboardSecurity') : getSecuritySheet(ss);
+  var state = getDeviceSecurityState(ss, deviceId, ctx);
   var newAttempts = state.failedAttempts + 1;
   var now = new Date();
   var nowIso = now.toISOString();
@@ -643,12 +697,18 @@ function recordDeviceLoginFailure(ss, deviceId) {
   };
 }
 
-function setupSheetsIfMissing(ss) {
-  getClientsSheet(ss);
-  getCategoriesSheet(ss);
-  getStatusesSheet(ss);
-  getSettingsSheet(ss);
-  getSecuritySheet(ss);
+function setupSheetsIfMissing(ss, ctx) {
+  var sClients = ctx ? ctx.getSheet('Clients') : ss.getSheetByName('Clients');
+  var sCats = ctx ? ctx.getSheet('Categories') : ss.getSheetByName('Categories');
+  var sStats = ctx ? ctx.getSheet('ApplicationStatuses') : ss.getSheetByName('ApplicationStatuses');
+  var sSettings = ctx ? ctx.getSheet('Settings') : ss.getSheetByName('Settings');
+  var sSec = ctx ? ctx.getSheet('DashboardSecurity') : ss.getSheetByName('DashboardSecurity');
+
+  if (!sClients) getClientsSheet(ss, ctx);
+  if (!sCats) getCategoriesSheet(ss, ctx);
+  if (!sStats) getStatusesSheet(ss, ctx);
+  if (!sSettings) getSettingsSheet(ss, ctx);
+  if (!sSec) getSecuritySheet(ss, ctx);
 }
 
 /**
@@ -888,15 +948,16 @@ function runDatabaseVerification(ss) {
   }
 }
 
-function readClients(ss) {
-  var sheet = getClientsSheet(ss);
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return [];
+function readClients(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('Clients') : ss.getSheetByName('Clients');
+  if (!sheet) return [];
   
-  var values = sheet.getRange(2, 1, lastRow - 1, 11).getValues();
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length <= 1) return [];
+  
   var clients = [];
   
-  for (var i = 0; i < values.length; i++) {
+  for (var i = 1; i < values.length; i++) {
     var row = values[i];
     var id = String(row[0] || '').trim();
     if (!id) continue;
@@ -923,15 +984,16 @@ function readClients(ss) {
   return clients;
 }
 
-function readCategories(ss) {
-  var sheet = getCategoriesSheet(ss);
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return [];
+function readCategories(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('Categories') : ss.getSheetByName('Categories');
+  if (!sheet) return [];
   
-  var values = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length <= 1) return [];
+  
   var categories = [];
   
-  for (var i = 0; i < values.length; i++) {
+  for (var i = 1; i < values.length; i++) {
     var row = values[i];
     var id = String(row[0] || '').trim();
     if (!id) continue;
@@ -946,15 +1008,16 @@ function readCategories(ss) {
   return categories;
 }
 
-function readStatuses(ss) {
-  var sheet = getStatusesSheet(ss);
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return [];
+function readStatuses(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('ApplicationStatuses') : ss.getSheetByName('ApplicationStatuses');
+  if (!sheet) return [];
   
-  var values = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length <= 1) return [];
+  
   var statuses = [];
   
-  for (var i = 0; i < values.length; i++) {
+  for (var i = 1; i < values.length; i++) {
     var row = values[i];
     var id = String(row[0] || '').trim();
     if (!id) continue;
@@ -969,15 +1032,16 @@ function readStatuses(ss) {
   return statuses;
 }
 
-function readSettings(ss) {
-  var sheet = getSettingsSheet(ss);
-  var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return { hasPasswordConfigured: false };
+function readSettings(ss, ctx) {
+  var sheet = ctx ? ctx.getSheet('Settings') : ss.getSheetByName('Settings');
+  if (!sheet) return { hasPasswordConfigured: false };
   
-  var values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+  var values = sheet.getDataRange().getValues();
+  if (!values || values.length <= 1) return { hasPasswordConfigured: false };
+  
   var settings = {};
   var hasPassword = false;
-  for (var i = 0; i < values.length; i++) {
+  for (var i = 1; i < values.length; i++) {
     var k = String(values[i][0] || '').trim();
     if (k) {
       var val = String(values[i][1] !== undefined && values[i][1] !== null ? values[i][1] : '');
@@ -1443,7 +1507,7 @@ function formatSheetDate(d) {
     }
   }
   try {
-    var dateObj = new Date(d);
+    var dateObj = (d instanceof Date) ? d : new Date(d);
     if (isNaN(dateObj.getTime())) return String(d);
     var y = dateObj.getFullYear();
     var m = String(dateObj.getMonth() + 1);

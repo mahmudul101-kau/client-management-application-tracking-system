@@ -469,52 +469,18 @@ export default function App() {
     }
 
     try {
-      const res = await verifyDashboardPassword(sheetsConfig.webAppUrl, enteredPassword);
-      if (res.verified) {
-        // Fetch complete Google Sheets data BEFORE unlocking/showing the Dashboard
-        const fetchRes = await fetchFromGoogleSheets(sheetsConfig.webAppUrl);
-        if (fetchRes.success) {
-          if (fetchRes.branding) {
-            setBranding(fetchRes.branding);
-            setActiveCurrency(fetchRes.branding.currency, fetchRes.branding.customCurrencySymbol);
-            saveStoredBranding(fetchRes.branding);
-          }
-          if (fetchRes.clients) setClients(fetchRes.clients);
-          if (fetchRes.categories) setCategories(fetchRes.categories);
-          if (fetchRes.applicationStatuses && fetchRes.applicationStatuses.length > 0) {
-            setApplicationStatuses(fetchRes.applicationStatuses);
-          }
-          saveLocalData({
-            clients: fetchRes.clients || [],
-            categories: fetchRes.categories || [],
-            applicationStatuses: fetchRes.applicationStatuses || applicationStatuses,
-            branding: fetchRes.branding || branding,
-            updatedAt: new Date().toISOString(),
-          });
-          const updatedConfig: GoogleSheetsConfig = {
-            ...sheetsConfig,
-            sheetName: fetchRes.sheetName || sheetsConfig.sheetName,
-            lastSyncedAt: new Date().toISOString(),
-            status: 'connected',
-          };
-          setSheetsConfig(updatedConfig);
-          saveSheetsConfig(updatedConfig);
+      // 1. Concurrently run password verification and Google Sheets data fetch
+      const [res, fetchRes] = await Promise.all([
+        verifyDashboardPassword(sheetsConfig.webAppUrl, enteredPassword),
+        fetchFromGoogleSheets(sheetsConfig.webAppUrl),
+      ]);
 
-          if (typeof window !== 'undefined') {
-            sessionStorage.setItem('dashboard_session_active', 'true');
-          }
-          setIsLocked(false);
-          setHasPasswordConfigured(true);
-          return { success: true };
-        } else {
-          return {
-            success: false,
-            error: fetchRes.error
-              ? (lang === 'bn' ? `ডাটাবেজ থেকে তথ্য লোড ব্যর্থ হয়েছে: ${fetchRes.error}` : `Failed to load database records: ${fetchRes.error}`)
-              : (lang === 'bn' ? 'ডাটাবেজ থেকে তথ্য লোড ব্যর্থ হয়েছে।' : 'Failed to load database records from Google Sheets.'),
-          };
-        }
-      } else {
+      // 2. SECURITY RULE 1: If password verification failed or device is locked:
+      // - Discard fetchRes completely
+      // - Do not update clients/categories/statuses in React state
+      // - Do not save fetched data to localStorage
+      // - Remain on LockPage and preserve failed-attempt / lockout handling
+      if (!res.verified) {
         return {
           success: false,
           error: res.error || t.incorrectPassword,
@@ -523,6 +489,53 @@ export default function App() {
           remainingAttempts: res.remainingAttempts,
         };
       }
+
+      // 3. SECURITY RULE 2: If password verification succeeded but Google Sheets data fetch failed:
+      // - Do not unlock the Dashboard
+      // - Do not show dummy/demo data
+      // - Show clear database error
+      if (!fetchRes.success) {
+        return {
+          success: false,
+          error: fetchRes.error
+            ? (lang === 'bn' ? `ডাটাবেজ থেকে তথ্য লোড ব্যর্থ হয়েছে: ${fetchRes.error}` : `Failed to load database records: ${fetchRes.error}`)
+            : (lang === 'bn' ? 'ডাটাবেজ থেকে তথ্য লোড ব্যর্থ হয়েছে।' : 'Failed to load database records from Google Sheets.'),
+        };
+      }
+
+      // 4. BOTH succeeded: Commit real Google Sheets records to React state and storage
+      if (fetchRes.branding) {
+        setBranding(fetchRes.branding);
+        setActiveCurrency(fetchRes.branding.currency, fetchRes.branding.customCurrencySymbol);
+        saveStoredBranding(fetchRes.branding);
+      }
+      if (fetchRes.clients) setClients(fetchRes.clients);
+      if (fetchRes.categories) setCategories(fetchRes.categories);
+      if (fetchRes.applicationStatuses && fetchRes.applicationStatuses.length > 0) {
+        setApplicationStatuses(fetchRes.applicationStatuses);
+      }
+      saveLocalData({
+        clients: fetchRes.clients || [],
+        categories: fetchRes.categories || [],
+        applicationStatuses: fetchRes.applicationStatuses || applicationStatuses,
+        branding: fetchRes.branding || branding,
+        updatedAt: new Date().toISOString(),
+      });
+      const updatedConfig: GoogleSheetsConfig = {
+        ...sheetsConfig,
+        sheetName: fetchRes.sheetName || sheetsConfig.sheetName,
+        lastSyncedAt: new Date().toISOString(),
+        status: 'connected',
+      };
+      setSheetsConfig(updatedConfig);
+      saveSheetsConfig(updatedConfig);
+
+      if (typeof window !== 'undefined') {
+        sessionStorage.setItem('dashboard_session_active', 'true');
+      }
+      setIsLocked(false);
+      setHasPasswordConfigured(true);
+      return { success: true };
     } catch (err: any) {
       return {
         success: false,

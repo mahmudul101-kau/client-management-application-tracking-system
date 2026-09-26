@@ -88,6 +88,7 @@ export const LockPage: React.FC<LockPageProps> = ({
       setIsDeviceLocked(true);
       setRemainingLockSeconds(local.remainingSeconds);
       setRemainingAttempts(0);
+      return; // Already locked locally, active countdown is running; skip redundant startup network query
     } else if (local.remainingAttempts < 5) {
       setRemainingAttempts(local.remainingAttempts);
     }
